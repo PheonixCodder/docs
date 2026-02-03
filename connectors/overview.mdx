@@ -165,11 +165,22 @@ All connectors support:
 <AccordionGroup>
   <Accordion title="Authentication">
     Each connector handles platform-specific authentication:
-    - OAuth 2.0 (Shopify, Amazon)
-    - API keys (Walmart, TikTok)
-    - Token-based auth (Faire, Target)
+    - **OAuth 2.0** — Shopify, Faire, TikTok, Amazon
+    - **API keys** — Walmart, Target
+    - **WMS credentials** — Warehance
 
-    Credentials are stored securely in the `store_credentials` table.
+    **Credential encryption:**
+    All credentials are encrypted using `CryptoService` before storage:
+    ```typescript
+    // Encryption
+    const encrypted = this.crypto.encrypt(credentials.accessToken);
+    await storeCredentialsRepo.save({ credentials: encrypted });
+
+    // Decryption
+    const decrypted = this.crypto.decrypt(stored.credentials.accessToken);
+    ```
+
+    Credentials are stored in the `store_credentials` table with JSONB type.
   </Accordion>
 
   <Accordion title="Data synchronization">
