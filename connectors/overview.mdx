@@ -81,21 +81,41 @@ export class ShopifyController {
 
 ### Service
 
-Contains business logic and API client:
+Contains business logic and API client with initialization pattern:
 
 ```typescript
 @Injectable()
 export class ShopifyService {
-  async fetchProducts(storeId: string) {
-    const credentials = await this.getCredentials(storeId);
-    const response = await this.httpService.get(
-      `https://${credentials.shop}.myshopify.com/admin/api/2024-01/products.json`,
-      { headers: { 'X-Shopify-Access-Token': credentials.accessToken } }
+  private client: GraphQLClient;
+  private shop: string;
+  private accessToken: string;
+
+  constructor(private crypto: CryptoService) {}
+
+  // Must be called before using service
+  initialize(credentials: any): void {
+    this.shop = this.crypto.decrypt(credentials.shopDomain);
+    this.accessToken = this.crypto.decrypt(credentials.accessToken);
+
+    this.client = new GraphQLClient(
+      `https://${this.shop}/admin/api/2026-01/graphql.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': this.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
     );
-    return response.data.products;
+  }
+
+  async fetchProducts(): Promise<ShopifyProductNode[]> {
+    const data = await this.execute<FetchProductsQuery>(FETCH_PRODUCTS);
+    return data?.products?.nodes || [];
   }
 }
 ```
+
+**Key pattern:** Services are initialized with decrypted credentials via `PlatformServiceFactory`.
 
 ### Mapper
 
