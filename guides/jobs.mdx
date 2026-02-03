@@ -571,6 +571,138 @@ Access the dashboard at `/admin/queues`.
   </Accordion>
 </AccordionGroup>
 
+## Platform-specific processing
+
+Each platform has unique sync logic in the ProductsProcessor:
+
+### Shopify sync flow
+
+```typescript
+private async processShopifyProducts(service: ShopifyService, store) {
+  // 1. Fetch products via GraphQL
+  const products = await service.fetchProducts();
+  
+  // 2. Map and insert products
+  const productRows = products.flatMap(p => 
+    mapShopifyProductToDB(p, store.id)
+  );
+  await this.productsRepo.insertProducts(productRows);
+
+  // 3. Resolve SKU → product_id mapping
+  const productIdRows = await this.productsRepo
+    .getProductIdsBySkusInBatches(store.id, skus, 'shopify');
+
+  // 4. Fetch inventory with delta sync
+  const inventoryItems = await service.fetchInventory(since);
+
+  // 5. Delta comparison and upsert
+  const existingInventory = await this.inventoryRepo.getBySkus(skus, store.id);
+  
+  for (const item of inventoryItems) {
+    const existing = existingInventory[item.sku];
+    if (!existing || shouldUpdateShopifyInventory(existing, next)) {
+      inventoryUpserts.push(next);
+    }
+  }
+
+  await this.inventoryRepo.updateInventoryBatch(inventoryUpserts);
+}
+```
+
+### Walmart sync flow
+
+```typescript
+private async processWalmartProducts(service: WalmartService, store) {
+  // 1. Fetch all products
+  const walmartProducts = await service.getProducts();
+
+  // 2. Upsert products
+  const productInserts = mapWalmartProductToDB(walmartProducts, store.id);
+  await this.productsRepo.insertProducts(productInserts);
+
+  // 3. Adaptive inventory fetch (rate-limited)
+  await fetchInventoryAdaptive(productInserts, {
+    batchSize: 3,
+    initialDelayMs: 500,
+    maxRetries: 3,
+    handler: async (product) => {
+      const inventory = await service.getInventory(product);
+      // Delta check and upsert
+    },
+  });
+}
+```
+
+**Adaptive fetching** prevents rate limiting by:
+- Processing in small batches (3 items)
+- Adding delays between requests (500ms)
+- Implementing exponential backoff on errors
+
+### TikTok sync flow
+
+```typescript
+private async processTiktokProducts(service: TikTokService, store) {
+  // 1. Fetch products (paginated)
+  const products = await service.getAllProducts(store.id);
+
+  // 2. Map and upsert products
+  const productRows = products.flatMap(p => 
+    mapTiktokProductToDB(p, store.id)
+  );
+  await this.productsRepo.insertProducts(productRows);
+
+  // 3. Fetch inventory in batches (max 50 product IDs per request)
+  const productIds = [...new Set(products.map(p => p.id))];
+  
+  for (let i = 0; i < productIds.length; i += 50) {
+    const batch = productIds.slice(i, i + 50);
+    const inventories = await service.getProductInventories(store.id, batch);
+    
+    // Process inventory with delta detection
+    for (const inv of inventories) {
+      // Map and compare with existing
+    }
+  }
+}
+```
+
+**TikTok-specific constraints:**
+- Maximum 50 product IDs per inventory request
+- Requires batching for large catalogs
+
+### Amazon sync flow
+
+```typescript
+private async processAmazonProducts(service: AmazonService, store) {
+  // 1. Fetch listings report
+  const listings = await service.getAllProducts(store);
+
+  // 2. Upsert products
+  const productInserts = listings.map(row => 
+    mapAmazonProductToSupabaseProduct(row, store.id)
+  );
+  await this.productsRepo.insertProducts(productInserts);
+
+  // 3. Fetch FBA inventory summaries
+  const inventorySummaries = await service.getInventorySummaries(store, since);
+
+  // 4. Delta comparison
+  for (const summary of inventorySummaries) {
+    const existing = existingInventory[summary.sellerSku];
+    if (!existing || shouldUpdateAmazonInventory(existing, mapped)) {
+      inventoryInserts.push(mapped);
+    }
+  }
+
+  await this.inventoryRepo.updateInventoryBatch(inventoryInserts);
+}
+```
+
+**Amazon-specific features:**
+- Uses Merchant Listings Report for products
+- FBA Inventory API for stock levels
+- Supports incremental sync via `since` parameter
+
 ## Advanced patterns
 
 ### Job chaining
