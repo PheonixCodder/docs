@@ -1,0 +1,565 @@
+---
+title: "Troubleshooting"
+description: "Solutions to common issues in CrossConnect-Phos"
+---
+
+## Common issues
+
+This guide covers solutions to frequently encountered problems in CrossConnect-Phos.
+
+## Backend issues
+
+### Application won't start
+
+<AccordionGroup>
+  <Accordion title="Missing environment variables">
+    **Error:** `Configuration validation failed`
+
+    **Solution:**
+    1. Check that all required variables are set in `.env`:
+       ```bash
+       SUPABASE_URL=...
+       SUPABASE_SERVICE_KEY=...
+       REDIS_HOST=...
+       REDIS_PORT=...
+       ```
+    2. Verify no typos in variable names
+    3. Ensure `.env` file is in the `backend/` directory
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    **Error:** `EADDRINUSE: address already in use :::3001`
+
+    **Solution:**
+    ```bash
+    # Find process using port 3001
+    lsof -i :3001
+
+    # Kill the process
+    kill -9 <PID>
+
+    # Or use a different port
+    PORT=3002 npm run start:dev
+    ```
+  </Accordion>
+
+  <Accordion title="Module not found">
+    **Error:** `Cannot find module '@nestjs/...'`
+
+    **Solution:**
+    ```bash
+    # Delete node_modules and reinstall
+    rm -rf node_modules package-lock.json
+    npm install
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Redis connection errors
+
+<AccordionGroup>
+  <Accordion title="Connection refused">
+    **Error:** `Error: connect ECONNREFUSED 127.0.0.1:6379`
+
+    **Solution:**
+    1. Verify Redis is running:
+       ```bash
+       redis-cli ping
+       # Should return: PONG
+       ```
+    2. Start Redis if not running:
+       ```bash
+       # macOS
+       brew services start redis
+
+       # Linux
+       sudo systemctl start redis
+
+       # Docker
+       docker run -p 6379:6379 redis:7
+       ```
+    3. Check `REDIS_HOST` and `REDIS_PORT` in `.env`
+  </Accordion>
+
+  <Accordion title="Authentication failed">
+    **Error:** `NOAUTH Authentication required`
+
+    **Solution:**
+    Add Redis password to `.env`:
+    ```bash
+    REDIS_PASSWORD=your-redis-password
+    ```
+  </Accordion>
+
+  <Accordion title="Connection timeout">
+    **Error:** `Error: Connection timeout`
+
+    **Solution:**
+    1. Check firewall rules allow Redis port
+    2. Verify Redis is accessible from your network
+    3. Increase timeout in configuration:
+       ```typescript
+       {
+         connectTimeout: 10000,  // 10 seconds
+       }
+       ```
+  </Accordion>
+</AccordionGroup>
+
+### Supabase connection errors
+
+<AccordionGroup>
+  <Accordion title="Invalid API key">
+    **Error:** `Invalid API key`
+
+    **Solution:**
+    1. Verify `SUPABASE_SERVICE_KEY` in `.env`
+    2. Get correct key from Supabase Dashboard → Settings → API
+    3. Ensure using `service_role` key, not `anon` key
+    4. Check for extra spaces or newlines in key
+  </Accordion>
+
+  <Accordion title="Table does not exist">
+    **Error:** `relation "products" does not exist`
+
+    **Solution:**
+    1. Run database migrations:
+       ```bash
+       supabase db push
+       ```
+    2. Verify tables exist in Supabase Dashboard → Table Editor
+    3. Check you're connected to correct project
+  </Accordion>
+
+  <Accordion title="Row level security">
+    **Error:** `new row violates row-level security policy`
+
+    **Solution:**
+    1. Disable RLS for service role operations
+    2. Or add appropriate RLS policies
+    3. Verify using `service_role` key, not `anon` key
+  </Accordion>
+</AccordionGroup>
+
+## Frontend issues
+
+### Application won't start
+
+<AccordionGroup>
+  <Accordion title="Module not found">
+    **Error:** `Module not found: Can't resolve '...'`
+
+    **Solution:**
+    ```bash
+    cd frontend
+    rm -rf node_modules .next package-lock.json
+    npm install
+    npm run dev
+    ```
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    **Error:** `Port 3000 is already in use`
+
+    **Solution:**
+    ```bash
+    # Use different port
+    npm run dev -- -p 3002
+
+    # Or kill process on port 3000
+    lsof -i :3000
+    kill -9 <PID>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### API connection issues
+
+<AccordionGroup>
+  <Accordion title="Cannot connect to backend">
+    **Error:** `Network Error` or `Failed to fetch`
+
+    **Solution:**
+    1. Verify backend is running:
+       ```bash
+       curl http://localhost:3001/api/health
+       ```
+    2. Check `NEXT_PUBLIC_API_URL` in `.env.local`:
+       ```bash
+       NEXT_PUBLIC_API_URL=http://localhost:3001/api
+       ```
+    3. Ensure `/api` suffix is included
+    4. Check browser console for CORS errors
+  </Accordion>
+
+  <Accordion title="CORS errors">
+    **Error:** `Access to fetch blocked by CORS policy`
+
+    **Solution:**
+    1. Verify `FRONTEND_URL` in backend `.env`:
+       ```bash
+       FRONTEND_URL=http://localhost:3000
+       ```
+    2. Restart backend after changing CORS settings
+    3. Check browser is accessing correct frontend URL
+  </Accordion>
+</AccordionGroup>
+
+## Job processing issues
+
+### Jobs not processing
+
+<AccordionGroup>
+  <Accordion title="Jobs stuck in queue">
+    **Symptoms:** Jobs remain in "waiting" state
+
+    **Solution:**
+    1. Check Redis connection
+    2. Verify job processors are registered:
+       ```typescript
+       @Processor('products')
+       export class ProductsProcessor { ... }
+       ```
+    3. Check for errors in processor code
+    4. Restart backend to reinitialize processors
+  </Accordion>
+
+  <Accordion title="Jobs failing immediately">
+    **Symptoms:** Jobs move to "failed" without processing
+
+    **Solution:**
+    1. Check job processor logs:
+       ```bash
+       npm run start:dev
+       # Watch for error messages
+       ```
+    2. Verify job data format is correct
+    3. Check for missing dependencies in processor
+    4. Review failed job details:
+       ```typescript
+       const failed = await queue.getFailed();
+       console.log(failed[0].failedReason);
+       ```
+  </Accordion>
+
+  <Accordion title="Jobs processing slowly">
+    **Symptoms:** Long queue wait times
+
+    **Solution:**
+    1. Increase concurrency:
+       ```typescript
+       @Processor('products', {
+         concurrency: 5,  // Process 5 jobs simultaneously
+       })
+       ```
+    2. Add more worker instances
+    3. Optimize processor code
+    4. Check for rate limiting issues
+  </Accordion>
+</AccordionGroup>
+
+### Job errors
+
+<AccordionGroup>
+  <Accordion title="Rate limit errors">
+    **Error:** `429 Too Many Requests`
+
+    **Solution:**
+    1. Reduce job frequency
+    2. Implement rate limiting:
+       ```typescript
+       await this.rateLimiter.wait();
+       await this.apiCall();
+       ```
+    3. Use exponential backoff:
+       ```typescript
+       {
+         attempts: 5,
+         backoff: {
+           type: 'exponential',
+           delay: 10000,
+         },
+       }
+       ```
+  </Accordion>
+
+  <Accordion title="Timeout errors">
+    **Error:** `Job timeout exceeded`
+
+    **Solution:**
+    1. Increase job timeout:
+       ```typescript
+       await queue.add('sync', data, {
+         timeout: 300000,  // 5 minutes
+       });
+       ```
+    2. Break large jobs into smaller chunks
+    3. Optimize API calls and database queries
+  </Accordion>
+</AccordionGroup>
+
+## Connector issues
+
+### Authentication failures
+
+<AccordionGroup>
+  <Accordion title="Invalid credentials">
+    **Error:** `401 Unauthorized`
+
+    **Solution:**
+    1. Verify credentials in database:
+       ```sql
+       SELECT * FROM store_credentials WHERE store_id = 'xxx';
+       ```
+    2. Check if access token has expired
+    3. Re-authenticate the store
+    4. Verify API permissions in platform
+  </Accordion>
+
+  <Accordion title="OAuth token expired">
+    **Error:** `Token has expired`
+
+    **Solution:**
+    1. Implement token refresh logic:
+       ```typescript
+       if (error.status === 401) {
+         await this.refreshToken(storeId);
+         return this.retry();
+       }
+       ```
+    2. Set up automatic token refresh
+    3. Monitor token expiration dates
+  </Accordion>
+</AccordionGroup>
+
+### Data sync issues
+
+<AccordionGroup>
+  <Accordion title="Missing data">
+    **Symptoms:** Products/orders not syncing
+
+    **Solution:**
+    1. Check job queue for failures:
+       ```typescript
+       const failed = await queue.getFailed();
+       ```
+    2. Verify API permissions
+    3. Check data mapping logic
+    4. Manually trigger sync:
+       ```bash
+       curl -X POST http://localhost:3001/api/shopify/sync \
+         -H "Content-Type: application/json" \
+         -d '{"storeId": "xxx"}'
+       ```
+  </Accordion>
+
+  <Accordion title="Duplicate data">
+    **Symptoms:** Same items appearing multiple times
+
+    **Solution:**
+    1. Use upsert instead of insert:
+       ```typescript
+       await repository.upsert(data);
+       ```
+    2. Add unique constraints to database
+    3. Implement deduplication logic
+    4. Use job IDs to prevent duplicate jobs
+  </Accordion>
+
+  <Accordion title="Outdated data">
+    **Symptoms:** Data not updating
+
+    **Solution:**
+    1. Check sync frequency settings
+    2. Verify webhooks are configured
+    3. Check for failed sync jobs
+    4. Force full resync:
+       ```typescript
+       await this.fullSync(storeId);
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Webhook issues
+
+### Webhooks not receiving events
+
+<AccordionGroup>
+  <Accordion title="URL not accessible">
+    **Solution:**
+    1. Verify webhook URL is publicly accessible
+    2. Test with curl:
+       ```bash
+       curl -X POST https://your-domain.com/api/webhooks/shopify \
+         -H "Content-Type: application/json" \
+         -d '{"test": true}'
+       ```
+    3. Check firewall rules
+    4. Ensure HTTPS is enabled
+  </Accordion>
+
+  <Accordion title="Signature verification failing">
+    **Error:** `Invalid webhook signature`
+
+    **Solution:**
+    1. Verify webhook secret in database
+    2. Check signature calculation logic
+    3. Ensure raw body is used for verification
+    4. Test with platform's webhook testing tool
+  </Accordion>
+
+  <Accordion title="Webhook timeouts">
+    **Error:** Platform reports webhook timeouts
+
+    **Solution:**
+    1. Respond immediately, process asynchronously:
+       ```typescript
+       @Post()
+       async handleWebhook(@Body() payload: any) {
+         await this.queue.add('process-webhook', payload);
+         return { success: true };  // Respond immediately
+       }
+       ```
+    2. Optimize webhook handler
+    3. Check for blocking operations
+  </Accordion>
+</AccordionGroup>
+
+## Performance issues
+
+### Slow API responses
+
+<AccordionGroup>
+  <Accordion title="Database queries slow">
+    **Solution:**
+    1. Add database indexes:
+       ```sql
+       CREATE INDEX idx_products_store_id ON products(store_id);
+       ```
+    2. Optimize queries:
+       ```typescript
+       // Bad: N+1 query
+       for (const product of products) {
+         await this.getVariants(product.id);
+       }
+
+       // Good: Single query
+       const variants = await this.getVariantsBulk(productIds);
+       ```
+    3. Use pagination for large datasets
+    4. Implement caching
+  </Accordion>
+
+  <Accordion title="High memory usage">
+    **Solution:**
+    1. Process data in batches:
+       ```typescript
+       const batchSize = 100;
+       for (let i = 0; i < items.length; i += batchSize) {
+         const batch = items.slice(i, i + batchSize);
+         await this.processBatch(batch);
+       }
+       ```
+    2. Use streams for large files
+    3. Clear unused variables
+    4. Monitor memory with:
+       ```bash
+       node --max-old-space-size=4096 dist/main.js
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Debugging tips
+
+### Enable debug logging
+
+<Tabs>
+  <Tab title="Backend">
+    ```bash
+    # Set log level to debug
+    LOG_LEVEL=debug npm run start:dev
+    ```
+  </Tab>
+
+  <Tab title="Frontend">
+    ```typescript
+    // Add to component
+    console.log('Debug info:', data);
+    ```
+  </Tab>
+
+  <Tab title="Jobs">
+    ```typescript
+    @Process('sync')
+    async handleSync(job: Job) {
+      console.log('Job started:', job.id);
+      console.log('Job data:', job.data);
+      // ... processing
+      console.log('Job completed:', job.id);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Check logs
+
+<CodeGroup>
+```bash Backend logs
+cd backend
+npm run start:dev
+# Watch console output
+```
+
+```bash Job queue logs
+# Check Redis logs
+redis-cli
+MONITOR
+```
+
+```bash Database logs
+# Check Supabase logs in dashboard
+# Or query logs table
+SELECT * FROM logs ORDER BY created_at DESC LIMIT 100;
+```
+</CodeGroup>
+
+### Use debugging tools
+
+- **NestJS DevTools** — Visual debugging for NestJS
+- **Redis Commander** — GUI for Redis
+- **Supabase Studio** — Database management
+- **Postman** — API testing
+- **React DevTools** — Frontend debugging
+
+## Getting help
+
+If you're still experiencing issues:
+
+1. **Check logs** — Review application, job, and database logs
+2. **Search issues** — Look for similar issues on GitHub
+3. **Create issue** — Open a new issue with:
+   - Error message
+   - Steps to reproduce
+   - Environment details
+   - Relevant logs
+
+<Card title="Report an issue" icon="github" iconType="brands" href="https://github.com/PheonixCodder/CrossConnect-Phos/issues">
+  Open an issue on GitHub for support
+</Card>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/guides/architecture">
+    Understand system architecture
+  </Card>
+  <Card title="Backend development" icon="server" href="/guides/backend">
+    Learn backend development
+  </Card>
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Write tests to prevent issues
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy to production
+  </Card>
+</CardGroup>

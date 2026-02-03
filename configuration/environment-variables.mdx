@@ -1,0 +1,315 @@
+---
+title: "Environment variables"
+description: "Configure CrossConnect-Phos with environment variables"
+---
+
+## Overview
+
+CrossConnect-Phos uses environment variables to configure both the backend and frontend. This guide covers all available variables and their purposes.
+
+<Warning>
+  Never commit `.env` files containing secrets to version control. Use `.env.example` files as templates and add `.env` to your `.gitignore`.
+</Warning>
+
+## Backend environment variables
+
+Create a `backend/.env` file with the following variables:
+
+### Required variables
+
+<ParamField path="SUPABASE_URL" type="string" required>
+  The URL of your Supabase project.
+  
+  **Example:** `https://abcdefghijklmnop.supabase.co`
+</ParamField>
+
+<ParamField path="SUPABASE_SERVICE_KEY" type="string" required>
+  The service role key for your Supabase project. This provides full access to your database.
+  
+  <Warning>
+    This is a sensitive credential. Never expose it in frontend code or public repositories.
+  </Warning>
+  
+  **Location:** Supabase Dashboard → Settings → API → service_role key
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" required>
+  The hostname or IP address of your Redis server.
+  
+  **Default:** `localhost`
+  
+  **Example:** `127.0.0.1` or `redis.example.com`
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="number" required>
+  The port number for your Redis server.
+  
+  **Default:** `6379`
+</ParamField>
+
+### Optional variables
+
+<ParamField path="REDIS_PASSWORD" type="string">
+  The password for your Redis server (if authentication is enabled).
+  
+  **Default:** Empty string (no authentication)
+</ParamField>
+
+<ParamField path="FRONTEND_URL" type="string">
+  The URL of your frontend application. Used for CORS configuration.
+  
+  **Default:** `http://localhost:3000`
+  
+  **Production example:** `https://app.example.com`
+</ParamField>
+
+<ParamField path="PORT" type="number">
+  The port on which the backend server will listen.
+  
+  **Default:** `3000`
+  
+  **Recommended:** `3001` (to avoid conflicts with Next.js default port)
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string">
+  The environment mode for the application.
+  
+  **Options:** `development`, `production`, `test`
+  
+  **Default:** `development`
+</ParamField>
+
+### New Relic integration (optional)
+
+<ParamField path="NEW_RELIC_APP_NAME" type="string">
+  The application name for New Relic APM monitoring.
+  
+  **Example:** `CrossConnect-Phos-Production`
+</ParamField>
+
+<ParamField path="NEW_RELIC_LICENSE_KEY" type="string">
+  Your New Relic license key for APM integration.
+  
+  **Location:** New Relic Dashboard → Account Settings → API Keys
+</ParamField>
+
+### Example backend .env file
+
+```bash backend/.env
+# Supabase Configuration
+SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Redis Configuration
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# Application Configuration
+FRONTEND_URL=http://localhost:3000
+PORT=3001
+NODE_ENV=development
+
+# New Relic (Optional)
+# NEW_RELIC_APP_NAME=CrossConnect-Phos-Dev
+# NEW_RELIC_LICENSE_KEY=your-license-key
+```
+
+## Frontend environment variables
+
+Create a `frontend/.env.local` file with the following variables:
+
+### Required variables
+
+<ParamField path="NEXT_PUBLIC_API_URL" type="string" required>
+  The base URL for the backend API.
+  
+  **Development:** `http://localhost:3001/api`
+  
+  **Production:** `https://api.example.com/api`
+  
+  <Note>
+    The `/api` suffix is required because the NestJS backend sets a global prefix of `api` in `main.ts`.
+  </Note>
+</ParamField>
+
+### Optional variables
+
+<ParamField path="NEXT_PUBLIC_SUPABASE_URL" type="string">
+  The URL of your Supabase project. Only needed if the frontend makes direct Supabase calls.
+  
+  **Example:** `https://abcdefghijklmnop.supabase.co`
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_SUPABASE_ANON_KEY" type="string">
+  The anonymous (public) key for your Supabase project. Only needed if the frontend makes direct Supabase calls.
+  
+  **Location:** Supabase Dashboard → Settings → API → anon public key
+  
+  <Info>
+    This key is safe to expose in frontend code as it has limited permissions.
+  </Info>
+</ParamField>
+
+### Example frontend .env.local file
+
+```bash frontend/.env.local
+# Backend API
+NEXT_PUBLIC_API_URL=http://localhost:3001/api
+
+# Supabase (Optional - only if frontend needs direct access)
+NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+## Environment-specific configurations
+
+### Development
+
+For local development, use the examples above with:
+- `NODE_ENV=development`
+- Local Redis instance
+- Supabase project (hosted or local via Supabase CLI)
+
+### Production
+
+For production deployments:
+
+<Steps>
+  <Step title="Use production URLs">
+    Update `FRONTEND_URL` and `NEXT_PUBLIC_API_URL` to your production domains.
+  </Step>
+  
+  <Step title="Secure Redis">
+    Use a managed Redis service with authentication:
+    ```bash
+    REDIS_HOST=redis.production.example.com
+    REDIS_PORT=6379
+    REDIS_PASSWORD=strong-password-here
+    ```
+  </Step>
+  
+  <Step title="Enable production mode">
+    Set `NODE_ENV=production` for optimizations and security.
+  </Step>
+  
+  <Step title="Use environment secrets">
+    Store sensitive variables in your hosting platform's secret management:
+    - Vercel: Environment Variables
+    - AWS: Secrets Manager or Parameter Store
+    - Docker: Docker Secrets
+    - Kubernetes: Secrets
+  </Step>
+</Steps>
+
+## Docker Compose example
+
+If using Docker Compose, you can reference environment variables in your `docker-compose.yml`:
+
+```yaml docker-compose.yml
+version: '3.8'
+services:
+  backend:
+    build: ./backend
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FRONTEND_URL=http://localhost:3000
+      - PORT=3001
+      - NODE_ENV=development
+    ports:
+      - "3001:3001"
+    depends_on:
+      - redis
+
+  frontend:
+    build: ./frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:3001/api
+    ports:
+      - "3000:3000"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+```
+
+Then create a `.env` file in the root directory:
+
+```bash .env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key
+```
+
+## Validation
+
+The backend uses NestJS ConfigModule with validation. If required environment variables are missing, the application will fail to start with a clear error message.
+
+To test your configuration:
+
+```bash
+cd backend
+npm run start:dev
+```
+
+Look for validation errors in the console output.
+
+## Security best practices
+
+<AccordionGroup>
+  <Accordion title="Never commit secrets">
+    Add `.env`, `.env.local`, and `.env.production` to your `.gitignore` file.
+  </Accordion>
+  
+  <Accordion title="Use different keys per environment">
+    Use separate Supabase projects and API keys for development, staging, and production.
+  </Accordion>
+  
+  <Accordion title="Rotate credentials regularly">
+    Periodically rotate your `SUPABASE_SERVICE_KEY` and other sensitive credentials.
+  </Accordion>
+  
+  <Accordion title="Limit key permissions">
+    Use the principle of least privilege. The frontend should only use the `anon` key, never the `service_role` key.
+  </Accordion>
+  
+  <Accordion title="Use secret management">
+    In production, use dedicated secret management services like AWS Secrets Manager, HashiCorp Vault, or your platform's built-in solution.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Backend won't start">
+    Check that all required variables are set:
+    - `SUPABASE_URL`
+    - `SUPABASE_SERVICE_KEY`
+    - `REDIS_HOST`
+    - `REDIS_PORT`
+    
+    Run `npm run start:dev` and check the error message for missing variables.
+  </Accordion>
+  
+  <Accordion title="Frontend can't connect to backend">
+    Verify that `NEXT_PUBLIC_API_URL` includes the `/api` suffix and points to the correct backend URL.
+    
+    Check browser console for CORS errors, which indicate a mismatch between `FRONTEND_URL` (backend) and the actual frontend URL.
+  </Accordion>
+  
+  <Accordion title="Redis connection errors">
+    Ensure Redis is running and accessible at the configured `REDIS_HOST` and `REDIS_PORT`.
+    
+    Test the connection:
+    ```bash
+    redis-cli -h $REDIS_HOST -p $REDIS_PORT ping
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Card title="View troubleshooting guide" icon="wrench" href="/guides/troubleshooting">
+  Find solutions to common configuration issues.
+</Card>

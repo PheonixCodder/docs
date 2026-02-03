@@ -1,0 +1,631 @@
+---
+title: "Frontend development"
+description: "Learn how to develop and customize the CrossConnect-Phos dashboard"
+---
+
+## Overview
+
+The CrossConnect-Phos frontend is built with Next.js 13+ using the App Router, React, TypeScript, and Tailwind CSS. It provides a multi-channel dashboard for monitoring and managing marketplace integrations.
+
+## Project structure
+
+```
+frontend/
+├── app/
+│   ├── (auth)/              # Authentication routes
+│   │   ├── login/
+│   │   └── register/
+│   ├── (dashboard)/         # Dashboard routes
+│   │   ├── integrations/    # Connector management
+│   │   ├── orders/          # Order views
+│   │   ├── products/        # Product views
+│   │   ├── returns/         # Returns views
+│   │   └── settings/        # Settings pages
+│   ├── layout.tsx           # Root layout
+│   └── page.tsx             # Home page
+├── components/              # Reusable UI components
+│   ├── ui/                  # Base UI components
+│   └── dashboard/           # Dashboard-specific components
+├── lib/                     # Utilities and helpers
+│   ├── api.ts              # API client
+│   └── utils.ts            # Helper functions
+├── public/                  # Static assets
+└── styles/                  # Global styles
+```
+
+## Development workflow
+
+### Running the frontend
+
+Start the frontend in development mode:
+
+```bash
+cd frontend
+npm run dev
+```
+
+The application will start on `http://localhost:3000`.
+
+### Available scripts
+
+<CodeGroup>
+```bash Development
+npm run dev
+```
+
+```bash Production build
+npm run build
+```
+
+```bash Production start
+npm run start
+```
+
+```bash Lint code
+npm run lint
+```
+</CodeGroup>
+
+## App Router
+
+CrossConnect-Phos uses Next.js App Router with route groups for organization.
+
+### Route groups
+
+Route groups organize routes without affecting the URL structure:
+
+- **(auth)** — Authentication pages (login, register)
+- **(dashboard)** — Protected dashboard pages
+
+**Example structure:**
+
+```
+app/
+├── (auth)/
+│   ├── login/
+│   │   └── page.tsx         # /login
+│   └── layout.tsx           # Auth layout
+└── (dashboard)/
+    ├── integrations/
+    │   └── page.tsx         # /integrations
+    └── layout.tsx           # Dashboard layout
+```
+
+### Creating a new page
+
+<Steps>
+  <Step title="Create the directory">
+    ```bash
+    mkdir -p app/(dashboard)/my-page
+    ```
+  </Step>
+
+  <Step title="Create page.tsx">
+    ```tsx app/(dashboard)/my-page/page.tsx
+    export default function MyPage() {
+      return (
+        <div>
+          <h1>My Page</h1>
+          <p>Content goes here</p>
+        </div>
+      );
+    }
+    ```
+  </Step>
+
+  <Step title="Add metadata (optional)">
+    ```tsx
+    import { Metadata } from 'next';
+
+    export const metadata: Metadata = {
+      title: 'My Page',
+      description: 'Description of my page',
+    };
+
+    export default function MyPage() {
+      // ...
+    }
+    ```
+  </Step>
+</Steps>
+
+## Components
+
+### UI components
+
+Base UI components are located in `components/ui/`:
+
+```tsx
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+
+export default function MyComponent() {
+  return (
+    <Card>
+      <Button>Click me</Button>
+    </Card>
+  );
+}
+```
+
+### Creating a new component
+
+<Steps>
+  <Step title="Create the component file">
+    ```bash
+    touch components/my-component.tsx
+    ```
+  </Step>
+
+  <Step title="Implement the component">
+    ```tsx components/my-component.tsx
+    interface MyComponentProps {
+      title: string;
+      onAction: () => void;
+    }
+
+    export function MyComponent({ title, onAction }: MyComponentProps) {
+      return (
+        <div className="p-4 border rounded">
+          <h2 className="text-xl font-bold">{title}</h2>
+          <button onClick={onAction}>Action</button>
+        </div>
+      );
+    }
+    ```
+  </Step>
+
+  <Step title="Use the component">
+    ```tsx
+    import { MyComponent } from '@/components/my-component';
+
+    export default function Page() {
+      return (
+        <MyComponent 
+          title="Hello" 
+          onAction={() => console.log('Clicked')} 
+        />
+      );
+    }
+    ```
+  </Step>
+</Steps>
+
+## API integration
+
+### API client
+
+The frontend communicates with the backend via a centralized API client.
+
+**Location:** `lib/api.ts`
+
+**Example usage:**
+
+```tsx
+import { api } from '@/lib/api';
+
+export default function ProductsPage() {
+  const [products, setProducts] = useState([]);
+
+  useEffect(() => {
+    async function fetchProducts() {
+      const data = await api.get('/products');
+      setProducts(data);
+    }
+    fetchProducts();
+  }, []);
+
+  return (
+    <div>
+      {products.map(product => (
+        <div key={product.id}>{product.name}</div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Making API calls
+
+<Tabs>
+  <Tab title="GET request">
+    ```typescript
+    const products = await api.get('/products');
+    ```
+  </Tab>
+
+  <Tab title="POST request">
+    ```typescript
+    const newProduct = await api.post('/products', {
+      name: 'New Product',
+      price: 29.99,
+    });
+    ```
+  </Tab>
+
+  <Tab title="PUT request">
+    ```typescript
+    const updated = await api.put('/products/123', {
+      name: 'Updated Name',
+    });
+    ```
+  </Tab>
+
+  <Tab title="DELETE request">
+    ```typescript
+    await api.delete('/products/123');
+    ```
+  </Tab>
+</Tabs>
+
+### Error handling
+
+Wrap API calls in try-catch blocks:
+
+```tsx
+async function handleSubmit() {
+  try {
+    await api.post('/products', formData);
+    toast.success('Product created successfully');
+  } catch (error) {
+    toast.error('Failed to create product');
+    console.error(error);
+  }
+}
+```
+
+## State management
+
+### Client-side state
+
+Use React hooks for component state:
+
+```tsx
+'use client';
+
+import { useState } from 'react';
+
+export default function Counter() {
+  const [count, setCount] = useState(0);
+
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={() => setCount(count + 1)}>
+        Increment
+      </button>
+    </div>
+  );
+}
+```
+
+### Server components
+
+Leverage Server Components for data fetching:
+
+```tsx
+async function getProducts() {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/products`);
+  return res.json();
+}
+
+export default async function ProductsPage() {
+  const products = await getProducts();
+
+  return (
+    <div>
+      {products.map(product => (
+        <div key={product.id}>{product.name}</div>
+      ))}
+    </div>
+  );
+}
+```
+
+## Styling with Tailwind CSS
+
+CrossConnect-Phos uses Tailwind CSS for styling.
+
+### Basic usage
+
+```tsx
+export default function Card() {
+  return (
+    <div className="p-6 bg-white rounded-lg shadow-md">
+      <h2 className="text-2xl font-bold text-gray-900">Title</h2>
+      <p className="mt-2 text-gray-600">Description</p>
+    </div>
+  );
+}
+```
+
+### Responsive design
+
+```tsx
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+  {/* Content */}
+</div>
+```
+
+### Custom classes
+
+Add custom utilities in `tailwind.config.js`:
+
+```javascript
+module.exports = {
+  theme: {
+    extend: {
+      colors: {
+        brand: {
+          primary: '#3B82F6',
+          secondary: '#10B981',
+        },
+      },
+    },
+  },
+};
+```
+
+## Forms and validation
+
+### Basic form
+
+```tsx
+'use client';
+
+import { useState } from 'react';
+
+export default function ProductForm() {
+  const [formData, setFormData] = useState({
+    name: '',
+    price: 0,
+  });
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    // Submit logic
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label htmlFor="name">Product Name</label>
+        <input
+          id="name"
+          type="text"
+          value={formData.name}
+          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          className="w-full px-3 py-2 border rounded"
+        />
+      </div>
+      <button type="submit" className="px-4 py-2 bg-blue-500 text-white rounded">
+        Submit
+      </button>
+    </form>
+  );
+}
+```
+
+### Form validation
+
+Use libraries like `react-hook-form` and `zod`:
+
+```tsx
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
+
+const schema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  price: z.number().min(0, 'Price must be positive'),
+});
+
+type FormData = z.infer<typeof schema>;
+
+export default function ProductForm() {
+  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+    resolver: zodResolver(schema),
+  });
+
+  const onSubmit = (data: FormData) => {
+    console.log(data);
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <input {...register('name')} />
+      {errors.name && <span>{errors.name.message}</span>}
+      
+      <input type="number" {...register('price', { valueAsNumber: true })} />
+      {errors.price && <span>{errors.price.message}</span>}
+      
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+```
+
+## Loading states
+
+### Loading UI
+
+Create loading states with Suspense:
+
+```tsx
+import { Suspense } from 'react';
+
+function LoadingSpinner() {
+  return <div>Loading...</div>;
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<LoadingSpinner />}>
+      <ProductList />
+    </Suspense>
+  );
+}
+```
+
+### Skeleton loaders
+
+```tsx
+export function ProductSkeleton() {
+  return (
+    <div className="animate-pulse">
+      <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+      <div className="h-4 bg-gray-200 rounded w-1/2 mt-2"></div>
+    </div>
+  );
+}
+```
+
+## Authentication
+
+Implement authentication in the `(auth)` route group:
+
+```tsx app/(auth)/login/page.tsx
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+
+export default function LoginPage() {
+  const router = useRouter();
+  const [credentials, setCredentials] = useState({ email: '', password: '' });
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    // Authenticate user
+    // On success:
+    router.push('/integrations');
+  };
+
+  return (
+    <form onSubmit={handleLogin}>
+      {/* Form fields */}
+    </form>
+  );
+}
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use Server Components by default">
+    Only add `'use client'` when you need interactivity, hooks, or browser APIs.
+  </Accordion>
+
+  <Accordion title="Optimize images">
+    Use Next.js Image component for automatic optimization:
+    ```tsx
+    import Image from 'next/image';
+
+    <Image src="/logo.png" alt="Logo" width={200} height={50} />
+    ```
+  </Accordion>
+
+  <Accordion title="Code splitting">
+    Use dynamic imports for large components:
+    ```tsx
+    import dynamic from 'next/dynamic';
+
+    const HeavyComponent = dynamic(() => import('./HeavyComponent'), {
+      loading: () => <p>Loading...</p>,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="Type safety">
+    Define TypeScript interfaces for all data structures:
+    ```tsx
+    interface Product {
+      id: string;
+      name: string;
+      price: number;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Accessibility">
+    Use semantic HTML and ARIA attributes:
+    ```tsx
+    <button aria-label="Close dialog" onClick={onClose}>
+      ×
+    </button>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Debugging
+
+### React DevTools
+
+Install the React DevTools browser extension for component inspection.
+
+### Console logging
+
+Use console methods for debugging:
+
+```tsx
+console.log('Data:', data);
+console.error('Error:', error);
+console.table(products);
+```
+
+### Error boundaries
+
+Create error boundaries to catch rendering errors:
+
+```tsx
+'use client';
+
+import { Component, ReactNode } from 'react';
+
+interface Props {
+  children: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <h1>Something went wrong.</h1>;
+    }
+
+    return this.props.children;
+  }
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Backend development" icon="server" href="/guides/backend">
+    Learn about the NestJS backend.
+  </Card>
+
+  <Card title="API integration" icon="plug" href="/connectors/overview">
+    Understand connector integrations.
+  </Card>
+
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy the frontend to production.
+  </Card>
+
+  <Card title="Testing" icon="flask" href="/guides/testing">
+    Write tests for your components.
+  </Card>
+</CardGroup>
