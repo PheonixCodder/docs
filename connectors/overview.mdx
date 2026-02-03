@@ -228,12 +228,22 @@ All connectors support:
   </Accordion>
 
   <Accordion title="Rate limiting">
-    Respects platform rate limits:
-    - Shopify: 2 requests/second
-    - Amazon: Varies by endpoint
-    - Walmart: 5000 requests/day
+    Respects platform rate limits with adaptive strategies:
 
-    Implements request throttling and queuing.
+    **Platform limits:**
+    - **Shopify:** 2 requests/second (REST), cost-based (GraphQL)
+    - **TikTok:** 10 requests/second (varies by endpoint)
+    - **Faire:** 100 requests/minute
+    - **Walmart:** 5000 requests/day
+    - **Amazon:** Varies by endpoint (SP-API throttling)
+
+    **Mitigation strategies:**
+    - Exponential backoff with jitter (prevents thundering herd)
+    - Automatic retry on 429 errors (max 5 attempts)
+    - Request queuing via BullMQ
+    - Adaptive batch sizing (Walmart: 3 items/batch with 500ms delay)
+    - Delta sync to reduce API calls
+    - Webhook usage where available
   </Accordion>
 </AccordionGroup>
 
