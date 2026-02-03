@@ -25,16 +25,36 @@ The backend is built with NestJS and follows a modular architecture pattern.
 <AccordionGroup>
   <Accordion title="AppModule" icon="cube">
     The root module that wires together all other modules:
-    - ConfigModule — Environment configuration and validation
-    - SupabaseModule — Database and storage connections
-    - BullModule — Redis-based job queue connection
-    - ConnectorsModule — Marketplace and warehouse integrations
-    - JobsModule — Background job processors
-    - WebhooksModule — Incoming webhook handlers
-    - LoggerModule — Structured logging with pino
-    - TasksModule — Scheduled tasks and polling
+    - **ConfigModule** — Environment configuration and validation
+    - **SupabaseModule** — Database and storage connections via `nestjs-supabase-js`
+    - **BullModule** — Redis-based job queue connection with BullMQ
+      - Connection timeout: 10 seconds
+      - Max retries per request: null (required for BullMQ)
+      - Default job options: `removeOnComplete: true`, `removeOnFail: false`
+    - **ConnectorsModule** — Marketplace and warehouse integrations
+    - **JobsModule** — Background job processors with retry logic
+    - **WebhooksModule** — Incoming webhook handlers
+    - **LoggerModule** — Structured logging with `nestjs-pino`
+      - Development: Pretty-printed colored logs
+      - Production: JSON structured logs
+    - **CommonModule** — Shared utilities (CryptoService, guards)
+    - **ScheduleModule** — Cron-based task scheduling
 
     **Location:** `backend/src/app.module.ts`
+
+    **Key configuration:**
+    ```typescript
+    BullModule.forRoot({
+      connection: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD,
+        tls: {},
+        maxRetriesPerRequest: null,  // Required for BullMQ
+        connectTimeout: 10000,
+      },
+    })
+    ```
   </Accordion>
 
   <Accordion title="ConnectorsModule" icon="plug">
