@@ -233,19 +233,57 @@ app/
 
 ### UI components
 
-Base UI components are located in `components/ui/`:
+CrossConnect-Phos uses **shadcn/ui** components with custom extensions:
+
+**Base components** (`components/ui/`):
+- All shadcn/ui primitives (button, card, dialog, table, etc.)
+- Custom components: `spinner.tsx`, `empty.tsx`, `field.tsx`
+
+**Custom components:**
+
+```tsx components/data-display/VirtualizedDataTable.tsx
+// High-performance table for large datasets
+import { VirtualizedDataTable } from '@/components/data-display/VirtualizedDataTable';
+
+<VirtualizedDataTable
+  columns={columns}
+  data={products}
+  loading={isLoading}
+  onRowClick={(row) => setProductId(row.id)}
+/>
+```
+
+```tsx components/data-display/StatusBadge.tsx
+// Platform-aware status badges
+import { StatusBadge } from '@/components/data-display/StatusBadge';
+
+<StatusBadge 
+  status={store.auth_status}  // 'active' | 'inactive'
+  platform={store.platform}
+/>
+```
+
+```tsx components/layout/PageContainer.tsx
+// Consistent page layout
+import { PageContainer } from '@/components/layout/PageContainer';
+
+<PageContainer maxWidth="2xl" padding="lg">
+  {/* Your content */}
+</PageContainer>
+```
+
+**Platform icons:**
 
 ```tsx
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-
-export default function MyComponent() {
-  return (
-    <Card>
-      <Button>Click me</Button>
-    </Card>
-  );
-}
+const PLATFORM_ICONS: Record<string, string> = {
+  amazon: '/images/amazon.svg',
+  faire: '/images/faire.svg',
+  shopify: '/images/shopify.svg',
+  target: '/images/target.png',
+  walmart: '/images/walmart.svg',
+  tiktok: '/images/tiktok.svg',
+  warehance: '/images/warehance.svg',
+};
 ```
 
 ### Creating a new component
