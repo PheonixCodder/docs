@@ -7,30 +7,106 @@ description: "Learn how to develop and customize the CrossConnect-Phos dashboard
 
 The CrossConnect-Phos frontend is built with Next.js 13+ using the App Router, React, TypeScript, and Tailwind CSS. It provides a multi-channel dashboard for monitoring and managing marketplace integrations.
 
-## Project structure
+## Project structure (actual)
 
 ```
 frontend/
 ├── app/
-│   ├── (auth)/              # Authentication routes
-│   │   ├── login/
-│   │   └── register/
-│   ├── (dashboard)/         # Dashboard routes
-│   │   ├── integrations/    # Connector management
-│   │   ├── orders/          # Order views
-│   │   ├── products/        # Product views
-│   │   ├── returns/         # Returns views
-│   │   └── settings/        # Settings pages
-│   ├── layout.tsx           # Root layout
-│   └── page.tsx             # Home page
-├── components/              # Reusable UI components
-│   ├── ui/                  # Base UI components
-│   └── dashboard/           # Dashboard-specific components
-├── lib/                     # Utilities and helpers
-│   ├── api.ts              # API client
-│   └── utils.ts            # Helper functions
-├── public/                  # Static assets
-└── styles/                  # Global styles
+│   ├── (auth)/                      # Authentication routes
+│   │   ├── signin/                  # Sign in page
+│   │   ├── signup/                  # Sign up page
+│   │   ├── forgot-password/         # Password reset
+│   │   ├── update-password/         # Update password
+│   │   ├── onboarding/              # Organization onboarding
+│   │   └── layout.tsx               # Auth layout
+│   ├── (dashboard)/                 # Protected dashboard routes
+│   │   ├── integrations/            # Store management
+│   │   ├── events/                  # Webhook events log
+│   │   ├── notifications/           # Alerts and notifications
+│   │   ├── settings/                # User/org settings
+│   │   ├── team/                    # Team management
+│   │   ├── layout.tsx               # Dashboard layout with sidebar
+│   │   └── page.tsx                 # Main dashboard
+│   ├── api/
+│   │   └── warehance/               # Warehance proxy route
+│   ├── auth/
+│   │   └── callback/                # OAuth callback handler
+│   ├── actions/                     # Server actions
+│   ├── layout.tsx                   # Root layout
+│   ├── providers.tsx                # Context providers
+│   └── globals.css                  # Global styles
+├── components/
+│   ├── data-display/                # Tables, badges, status
+│   │   ├── VirtualizedDataTable.tsx # High-performance tables
+│   │   ├── StatusBadge.tsx
+│   │   └── EmptyState.tsx
+│   ├── feedback/                    # Loading states
+│   ├── forms/                       # Form wrappers
+│   ├── layout/                      # Layout components
+│   │   ├── PageContainer.tsx
+│   │   ├── SearchCommand.tsx        # Cmd+K search
+│   │   ├── SidebarButtons.tsx
+│   │   └── orgs-selector.tsx        # Organization switcher
+│   ├── navigation/
+│   │   └── Breadcrumbs.tsx
+│   └── ui/                          # shadcn/ui components
+├── hooks/
+│   ├── use-mobile.ts
+│   ├── useNotifications.ts
+│   └── useStores.ts
+├── lib/
+│   ├── supabase/                    # Supabase clients
+│   │   ├── client.ts                # Browser client
+│   │   ├── server.ts                # Server client
+│   │   ├── admin.ts                 # Admin client
+│   │   └── proxy.ts                 # Proxy for API routes
+│   ├── helpers/
+│   │   └── getUser.ts
+│   ├── constants.ts
+│   ├── crypto.ts                    # Client-side encryption
+│   ├── formatters.ts                # Currency/number formatting
+│   ├── mockData.ts
+│   └── utils.ts                     # Utility functions
+├── modules/                         # Feature modules
+│   ├── auth/                        # Authentication
+│   │   ├── hooks/
+│   │   ├── schema/                  # Zod validation schemas
+│   │   └── ui/
+│   ├── dashboard/                   # Main dashboard
+│   │   ├── hooks/
+│   │   │   └── use-dashboard-data.ts
+│   │   └── ui/
+│   │       ├── components/
+│   │       │   ├── AlertsPanel.tsx
+│   │       │   ├── ChannelCard.tsx
+│   │       │   ├── MetricCard.tsx
+│   │       │   ├── SalesChart.tsx
+│   │       │   ├── orders-table.tsx
+│   │       │   ├── products-table.tsx
+│   │       │   ├── inventory-table.tsx
+│   │       │   ├── returns-table.tsx
+│   │       │   └── app-sidebar.tsx
+│   │       └── views/
+│   │           └── DashboardView.tsx
+│   ├── events/                      # Webhook events
+│   ├── integrations/                # Store integrations
+│   ├── notifications/               # Alerts
+│   ├── settings/                    # Settings
+│   └── team/                        # Team management
+├── public/
+│   └── images/                      # Platform logos
+│       ├── amazon.svg
+│       ├── faire.svg
+│       ├── shopify.svg
+│       ├── target.png
+│       ├── tiktok.svg
+│       ├── walmart.svg
+│       └── warehance.svg
+├── store/
+│   └── useStore.ts                  # Zustand global state
+├── types/
+│   └── supabase.types.ts            # Generated Supabase types
+└── package.json
 ```
 
 ## Development workflow
