@@ -185,11 +185,29 @@ All connectors support:
 
   <Accordion title="Data synchronization">
     Connectors sync three main data types:
-    - **Products** — SKUs, prices, inventory, descriptions
-    - **Orders** — Order details, customer info, fulfillment status
-    - **Returns** — Return requests, reasons, refund status
+    - **Products & Inventory** — SKUs, prices, stock levels, descriptions
+      - Atomic sync: Products and inventory updated together
+      - Delta detection: Only updates changed inventory
+      - Batch operations: Efficient bulk inserts
+    
+    - **Orders & Order Items** — Order details, line items, fulfillment
+      - Includes customer info, payment status
+      - Links to products via SKU
+      - Tracks fulfillment status
+    
+    - **Returns** — Return requests, refunds (selective platforms)
+      - Supported: Amazon, Walmart, Shopify, Target
+      - Not supported: TikTok, Faire, Warehance
 
-    Sync can be triggered manually or scheduled automatically.
+    **Sync modes:**
+    - **Full sync** — Fetches all data (first sync or no timestamp)
+    - **Delta sync** — Fetches only changed data using `since` parameter
+    - **Webhook sync** — Real-time updates (Shopify, TikTok, Walmart)
+
+    **Sync triggers:**
+    - Manual: Via API endpoint or dashboard
+    - Scheduled: Via `TasksService.pollAllActiveStores()`
+    - Webhook: Automatic on platform events
   </Accordion>
 
   <Accordion title="Webhooks (where supported)">
