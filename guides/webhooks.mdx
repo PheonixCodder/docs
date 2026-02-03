@@ -49,7 +49,7 @@ sequenceDiagram
 
 ### Shopify webhooks
 
-**Endpoint:** `/api/webhooks/shopify`
+**Endpoint:** `/api/webhooks/shopify/{storeId}/{userId}`
 
 **Supported events:**
 - `products/create` — New product created
@@ -59,10 +59,63 @@ sequenceDiagram
 - `orders/updated` — Order updated
 - `inventory_levels/update` — Inventory changed
 
+**Automatic webhook creation:**
+
+The `ShopifyWebhookService` automatically creates webhooks during store setup:
+
+```typescript
+async reconcileWebhooks(
+  credentials: any,
+  storeId: string,
+  userId: string,
+  topics: string[],
+) {
+  this.shopify.initialize(credentials);
+
+  const baseUrl = `${this.config.get('APP_URL')}/api/webhooks/shopify/${storeId}/${userId}`;
+
+  // List existing webhooks
+  const existing = await this.shopify.execute<ListWebhooksQuery>(LIST_WEBHOOKS);
+  const existingTopics = new Set(
+    existing.webhookSubscriptions.nodes.map(w => w.topic)
+  );
+
+  // Create missing webhooks
+  for (const topic of topics) {
+    if (existingTopics.has(topic)) continue;
+
+    await this.shopify.execute<WebhookCreateMutation>(
+      CREATE_WEBHOOK,
+      { topic, callbackUrl: baseUrl }
+    );
+
+    this.logger.log(`Created webhook: ${topic}`);
+  }
+}
+```
+
+**Webhook validation:**
+
+```typescript
+@UseGuards(ShopifyWebhookGuard)
+@Post(':storeId/:userId')
+async handleWebhook(
+  @Param('storeId') storeId: string,
+  @Param('userId') userId: string,
+  @Headers('x-shopify-topic') topic: string,
+  @Headers('x-shopify-shop-domain') shop: string,
+  @Body() payload: any,
+) {
+  // ShopifyWebhookGuard validates HMAC signature
+  await this.webhookService.processWebhook(topic, payload, shop);
+  return { success: true };
+}
+```
+
 **Example request:**
 
-```json
-POST /api/webhooks/shopify
+```http
+POST /api/webhooks/shopify/store-123/user-456
 X-Shopify-Topic: products/create
 X-Shopify-Hmac-Sha256: base64-encoded-signature
 X-Shopify-Shop-Domain: example.myshopify.com
