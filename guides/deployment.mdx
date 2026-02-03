@@ -1,0 +1,635 @@
+---
+title: "Deployment"
+description: "Deploy CrossConnect-Phos to production"
+---
+
+## Overview
+
+This guide covers deploying CrossConnect-Phos to production environments. The platform consists of a NestJS backend, Next.js frontend, Redis for job queues, and Supabase for data storage.
+
+## Prerequisites
+
+Before deploying, ensure you have:
+
+- Production Supabase project
+- Redis instance (managed service recommended)
+- Domain name with SSL certificate
+- Hosting platform account (Vercel, AWS, Docker, etc.)
+
+## Deployment options
+
+<CardGroup cols={2}>
+  <Card title="Vercel + Railway" icon="bolt">
+    Easiest option for quick deployment
+  </Card>
+  <Card title="Docker Compose" icon="docker" iconType="brands">
+    Self-hosted with full control
+  </Card>
+  <Card title="AWS" icon="aws" iconType="brands">
+    Enterprise-grade scalability
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra">
+    Advanced orchestration
+  </Card>
+</CardGroup>
+
+## Option 1: Vercel + Railway
+
+### Deploy frontend to Vercel
+
+<Steps>
+  <Step title="Connect repository">
+    1. Go to [Vercel](https://vercel.com)
+    2. Click "New Project"
+    3. Import your GitHub repository
+    4. Select the `frontend` directory as root
+  </Step>
+
+  <Step title="Configure environment variables">
+    Add these variables in Vercel project settings:
+
+    ```bash
+    NEXT_PUBLIC_API_URL=https://your-backend-url.com/api
+    NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+    ```
+  </Step>
+
+  <Step title="Deploy">
+    Click "Deploy" and Vercel will build and deploy your frontend.
+  </Step>
+</Steps>
+
+### Deploy backend to Railway
+
+<Steps>
+  <Step title="Create new project">
+    1. Go to [Railway](https://railway.app)
+    2. Click "New Project"
+    3. Select "Deploy from GitHub repo"
+    4. Choose your repository
+  </Step>
+
+  <Step title="Add Redis service">
+    1. Click "New" → "Database" → "Redis"
+    2. Railway will provision a Redis instance
+    3. Note the connection details
+  </Step>
+
+  <Step title="Configure backend service">
+    1. Add a new service for the backend
+    2. Set root directory to `backend`
+    3. Add environment variables:
+
+    ```bash
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_SERVICE_KEY=your-service-key
+    REDIS_HOST=${{Redis.REDIS_HOST}}
+    REDIS_PORT=${{Redis.REDIS_PORT}}
+    REDIS_PASSWORD=${{Redis.REDIS_PASSWORD}}
+    FRONTEND_URL=https://your-frontend.vercel.app
+    PORT=3001
+    NODE_ENV=production
+    ```
+  </Step>
+
+  <Step title="Deploy">
+    Railway will automatically build and deploy your backend.
+  </Step>
+</Steps>
+
+## Option 2: Docker Compose
+
+### Create docker-compose.yml
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FRONTEND_URL=${FRONTEND_URL}
+      - NODE_ENV=production
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_SUPABASE_URL=${SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+```
+
+### Create Dockerfiles
+
+<Tabs>
+  <Tab title="Backend Dockerfile">
+    ```dockerfile backend/Dockerfile
+    FROM node:18-alpine AS builder
+
+    WORKDIR /app
+
+    COPY package*.json ./
+    RUN npm ci
+
+    COPY . .
+    RUN npm run build
+
+    FROM node:18-alpine
+
+    WORKDIR /app
+
+    COPY package*.json ./
+    RUN npm ci --only=production
+
+    COPY --from=builder /app/dist ./dist
+    COPY --from=builder /app/.api ./.api
+
+    EXPOSE 3001
+
+    CMD ["node", "dist/main"]
+    ```
+  </Tab>
+
+  <Tab title="Frontend Dockerfile">
+    ```dockerfile frontend/Dockerfile
+    FROM node:18-alpine AS builder
+
+    WORKDIR /app
+
+    COPY package*.json ./
+    RUN npm ci
+
+    COPY . .
+    RUN npm run build
+
+    FROM node:18-alpine
+
+    WORKDIR /app
+
+    COPY package*.json ./
+    RUN npm ci --only=production
+
+    COPY --from=builder /app/.next ./.next
+    COPY --from=builder /app/public ./public
+
+    EXPOSE 3000
+
+    CMD ["npm", "start"]
+    ```
+  </Tab>
+</Tabs>
+
+### Deploy
+
+```bash
+# Create .env file with production values
+cp .env.example .env
+
+# Build and start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+## Option 3: AWS
+
+### Architecture
+
+```
+┌─────────────┐
+│   Route 53  │ (DNS)
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│     ALB     │ (Load Balancer)
+└──────┬──────┘
+       │
+   ┌───┴───┐
+   │       │
+┌──▼──┐ ┌──▼──┐
+│ ECS │ │ ECS │ (Backend containers)
+└─────┘ └─────┘
+   │
+┌──▼──────────┐
+│ ElastiCache │ (Redis)
+└─────────────┘
+```
+
+### Services needed
+
+- **ECS Fargate** — Container orchestration
+- **ElastiCache** — Managed Redis
+- **RDS** (optional) — If not using Supabase
+- **ALB** — Load balancer
+- **ECR** — Container registry
+- **CloudFront** — CDN for frontend
+
+### Deployment steps
+
+<Steps>
+  <Step title="Create ECR repositories">
+    ```bash
+    aws ecr create-repository --repository-name crossconnect-backend
+    aws ecr create-repository --repository-name crossconnect-frontend
+    ```
+  </Step>
+
+  <Step title="Build and push images">
+    ```bash
+    # Login to ECR
+    aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
+
+    # Build and push backend
+    docker build -t crossconnect-backend ./backend
+    docker tag crossconnect-backend:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/crossconnect-backend:latest
+    docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/crossconnect-backend:latest
+
+    # Build and push frontend
+    docker build -t crossconnect-frontend ./frontend
+    docker tag crossconnect-frontend:latest <account-id>.dkr.ecr.us-east-1.amazonaws.com/crossconnect-frontend:latest
+    docker push <account-id>.dkr.ecr.us-east-1.amazonaws.com/crossconnect-frontend:latest
+    ```
+  </Step>
+
+  <Step title="Create ECS cluster and services">
+    Use AWS Console or Infrastructure as Code (Terraform/CloudFormation) to create:
+    - ECS cluster
+    - Task definitions for backend and frontend
+    - Services with auto-scaling
+    - Load balancer configuration
+  </Step>
+
+  <Step title="Configure environment variables">
+    Store secrets in AWS Secrets Manager and reference them in task definitions.
+  </Step>
+</Steps>
+
+## Environment configuration
+
+### Production environment variables
+
+<Tabs>
+  <Tab title="Backend">
+    ```bash
+    SUPABASE_URL=https://your-project.supabase.co
+    SUPABASE_SERVICE_KEY=<secret>
+    REDIS_HOST=production-redis.cache.amazonaws.com
+    REDIS_PORT=6379
+    REDIS_PASSWORD=<secret>
+    FRONTEND_URL=https://app.yourdomain.com
+    PORT=3001
+    NODE_ENV=production
+    NEW_RELIC_APP_NAME=CrossConnect-Production
+    NEW_RELIC_LICENSE_KEY=<secret>
+    ```
+  </Tab>
+
+  <Tab title="Frontend">
+    ```bash
+    NEXT_PUBLIC_API_URL=https://api.yourdomain.com/api
+    NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=<public-key>
+    ```
+  </Tab>
+</Tabs>
+
+## Database setup
+
+### Supabase production
+
+<Steps>
+  <Step title="Create production project">
+    Create a new Supabase project for production (separate from development).
+  </Step>
+
+  <Step title="Run migrations">
+    Apply database schema:
+    ```bash
+    supabase db push
+    ```
+  </Step>
+
+  <Step title="Configure backups">
+    Enable automatic backups in Supabase dashboard (Pro plan or higher).
+  </Step>
+
+  <Step title="Set up monitoring">
+    Configure alerts for database performance and errors.
+  </Step>
+</Steps>
+
+## SSL/TLS configuration
+
+### Using Let's Encrypt
+
+```bash
+# Install certbot
+sudo apt-get install certbot
+
+# Generate certificate
+sudo certbot certonly --standalone -d api.yourdomain.com
+
+# Configure nginx
+server {
+    listen 443 ssl;
+    server_name api.yourdomain.com;
+
+    ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+## Monitoring and logging
+
+### Application monitoring
+
+<AccordionGroup>
+  <Accordion title="New Relic">
+    Add New Relic APM for performance monitoring:
+
+    ```bash
+    npm install newrelic
+    ```
+
+    Configure in `newrelic.js`:
+    ```javascript
+    exports.config = {
+      app_name: ['CrossConnect-Phos'],
+      license_key: process.env.NEW_RELIC_LICENSE_KEY,
+      logging: {
+        level: 'info'
+      }
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="CloudWatch (AWS)">
+    Configure CloudWatch for logs and metrics:
+
+    ```json
+    {
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/crossconnect",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Sentry">
+    Add Sentry for error tracking:
+
+    ```bash
+    npm install @sentry/node
+    ```
+
+    Initialize in `main.ts`:
+    ```typescript
+    import * as Sentry from '@sentry/node';
+
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV,
+    });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Health checks
+
+Implement health check endpoints:
+
+```typescript
+@Controller('health')
+export class HealthController {
+  @Get()
+  async check() {
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    };
+  }
+
+  @Get('redis')
+  async checkRedis() {
+    // Test Redis connection
+    const isHealthy = await this.redisService.ping();
+    return { redis: isHealthy ? 'ok' : 'error' };
+  }
+
+  @Get('database')
+  async checkDatabase() {
+    // Test database connection
+    const isHealthy = await this.supabaseService.ping();
+    return { database: isHealthy ? 'ok' : 'error' };
+  }
+}
+```
+
+## Scaling
+
+### Horizontal scaling
+
+<AccordionGroup>
+  <Accordion title="Backend scaling">
+    Run multiple backend instances behind a load balancer:
+
+    ```yaml
+    # docker-compose.yml
+    backend:
+      deploy:
+        replicas: 3
+        resources:
+          limits:
+            cpus: '1'
+            memory: 1G
+    ```
+  </Accordion>
+
+  <Accordion title="Job processing scaling">
+    Add dedicated worker instances:
+
+    ```yaml
+    worker:
+      build: ./backend
+      command: npm run start:worker
+      environment:
+        - WORKER_ONLY=true
+      deploy:
+        replicas: 5
+    ```
+  </Accordion>
+
+  <Accordion title="Redis clustering">
+    Use Redis Cluster for high availability:
+
+    ```bash
+    REDIS_CLUSTER_NODES=redis-1:6379,redis-2:6379,redis-3:6379
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Auto-scaling
+
+Configure auto-scaling based on metrics:
+
+```yaml
+# AWS ECS auto-scaling
+{
+  "targetTrackingScalingPolicyConfiguration": {
+    "targetValue": 75.0,
+    "predefinedMetricSpecification": {
+      "predefinedMetricType": "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+```
+
+## Security checklist
+
+<AccordionGroup>
+  <Accordion title="Environment variables">
+    - [ ] All secrets stored in secure vault
+    - [ ] No hardcoded credentials
+    - [ ] Different keys for each environment
+  </Accordion>
+
+  <Accordion title="Network security">
+    - [ ] HTTPS enabled everywhere
+    - [ ] CORS configured correctly
+    - [ ] Firewall rules in place
+    - [ ] VPC/private networking (if applicable)
+  </Accordion>
+
+  <Accordion title="Authentication">
+    - [ ] Strong password policies
+    - [ ] API key rotation schedule
+    - [ ] OAuth tokens refreshed regularly
+  </Accordion>
+
+  <Accordion title="Monitoring">
+    - [ ] Error tracking enabled
+    - [ ] Performance monitoring active
+    - [ ] Security alerts configured
+    - [ ] Log aggregation set up
+  </Accordion>
+</AccordionGroup>
+
+## Backup and disaster recovery
+
+<Steps>
+  <Step title="Database backups">
+    Configure automated Supabase backups (daily recommended).
+  </Step>
+
+  <Step title="Redis persistence">
+    Enable Redis RDB snapshots:
+    ```bash
+    save 900 1
+    save 300 10
+    save 60 10000
+    ```
+  </Step>
+
+  <Step title="Application backups">
+    Regularly backup:
+    - Environment configurations
+    - SSL certificates
+    - Application code (via Git)
+  </Step>
+
+  <Step title="Disaster recovery plan">
+    Document recovery procedures:
+    - RTO (Recovery Time Objective)
+    - RPO (Recovery Point Objective)
+    - Failover procedures
+  </Step>
+</Steps>
+
+## Post-deployment
+
+<AccordionGroup>
+  <Accordion title="Verify deployment">
+    - [ ] Health checks passing
+    - [ ] Frontend accessible
+    - [ ] Backend API responding
+    - [ ] Jobs processing correctly
+    - [ ] Webhooks receiving events
+  </Accordion>
+
+  <Accordion title="Performance testing">
+    - [ ] Load testing completed
+    - [ ] Response times acceptable
+    - [ ] Database queries optimized
+    - [ ] CDN caching working
+  </Accordion>
+
+  <Accordion title="Monitoring setup">
+    - [ ] Dashboards created
+    - [ ] Alerts configured
+    - [ ] On-call rotation established
+    - [ ] Runbooks documented
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Monitoring" icon="chart-line">
+    Set up comprehensive monitoring and alerting
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Learn how to debug production issues
+  </Card>
+  <Card title="Scaling" icon="arrows-maximize">
+    Plan for growth and increased load
+  </Card>
+  <Card title="Security" icon="shield">
+    Implement security best practices
+  </Card>
+</CardGroup>
