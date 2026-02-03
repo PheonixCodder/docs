@@ -110,12 +110,37 @@ Create a `backend/.env` file with the following variables:
   **Location:** New Relic Dashboard → Account Settings → API Keys
 </ParamField>
 
+### Platform-specific variables (optional)
+
+<ParamField path="FAIRE_APP_ID" type="string">
+  Faire application ID for OAuth authentication.
+  
+  **Location:** Faire Developer Portal → Your App → Credentials
+</ParamField>
+
+<ParamField path="FAIRE_APP_SECRET" type="string">
+  Faire application secret for OAuth authentication.
+  
+  **Location:** Faire Developer Portal → Your App → Credentials
+</ParamField>
+
+<ParamField path="APP_URL" type="string">
+  The public URL of your backend application (used for webhook callbacks).
+  
+  **Development:** `http://localhost:3001`
+  
+  **Production:** `https://api.yourdomain.com`
+</ParamField>
+
 ### Example backend .env file
 
 ```bash backend/.env
 # Supabase Configuration
 SUPABASE_URL=https://abcdefghijklmnop.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Security
+CREDENTIALS_ENCRYPTION_KEY=a1b2c3d4e5f6789...  # 64-char hex string
 
 # Redis Configuration
 REDIS_HOST=127.0.0.1
@@ -124,8 +149,13 @@ REDIS_PASSWORD=
 
 # Application Configuration
 FRONTEND_URL=http://localhost:3000
+APP_URL=http://localhost:3001
 PORT=3001
 NODE_ENV=development
+
+# Platform Credentials (Optional)
+FAIRE_APP_ID=your-faire-app-id
+FAIRE_APP_SECRET=your-faire-app-secret
 
 # New Relic (Optional)
 # NEW_RELIC_APP_NAME=CrossConnect-Phos-Dev
