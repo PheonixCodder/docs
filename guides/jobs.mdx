@@ -300,76 +300,128 @@ export class ProductsProcessor {
 }
 ```
 
-## Scheduled jobs
+## Scheduled jobs (actual implementation)
 
-The TasksService schedules recurring jobs using NestJS Schedule.
+The TasksService uses `@Interval` decorators (not cron) for scheduling:
 
-### Polling stores
+### pollAllActiveStores() — Main sync orchestrator
 
-The service polls active stores and enqueues sync jobs:
+**Not currently scheduled** — Must be triggered manually or via external scheduler
 
 ```typescript
-@Injectable()
-export class TasksService {
-  @Cron('*/15 * * * *')  // Every 15 minutes
-  async pollStores() {
-    const activeStores = await this.storesRepository.findActive();
+async pollAllActiveStores() {
+  this.logger.log('Starting scheduled poll of all active stores');
 
-    for (const store of activeStores) {
-      // Enqueue product sync
-      await this.productsQueue.add('sync', {
-        storeId: store.id,
-        platform: store.platform,
-      });
+  // 1. Fetch active stores with credentials
+  const storesWithCredentials = 
+    await this.storeCredentialsService.getActiveStoresWithCredentials();
 
-      // Enqueue order sync
-      await this.ordersQueue.add('sync', {
-        storeId: store.id,
+  if (storesWithCredentials.length === 0) {
+    this.logger.warn('No active stores with credentials found');
+    return;
+  }
+
+  // 2. Process each store sequentially
+  for (const { store, credentials } of storesWithCredentials) {
+    try {
+      // Validate credentials
+      if (!credentials || Object.keys(credentials).length === 0) {
+        this.logger.warn(`No credentials for store ${store.id}`);
+        continue;
+      }
+
+      // Get incremental sync timestamp
+      const since = store.last_synced_at
+        ? new Date(store.last_synced_at).toISOString()
+        : undefined;
+
+      // Queue all three job types
+      await this.queueProductsJob(store, credentials, since);
+      await this.queueOrdersJob(store, credentials, since);
+      await this.queueReturnsJob(store, credentials, since);
+
+      // 500ms delay to prevent rate limiting
+      await new Promise(r => setTimeout(r, 500));
+
+    } catch (error) {
+      // Update store health and create alert
+      await this.storesRepository.updateStoreHealth(
+        store.id,
+        'unhealthy',
+        `Failed to queue sync jobs: ${error.message}`
+      );
+
+      await this.alertsRepository.createAlert({
+        store_id: store.id,
+        alert_type: 'sync_queue_failure',
+        message: `Failed to queue jobs: ${error.message}`,
+        severity: 'high',
         platform: store.platform,
       });
     }
   }
+
+  // 3. Mark stores as queued (bulk update)
+  await this.markStoresAsQueued(queuedStores);
 }
 ```
 
-### Health checks
+### healthCheck() — System monitoring
 
-Regular health checks ensure system stability:
+**Interval:** Every 5 minutes (300,000ms)
 
 ```typescript
-@Cron('*/5 * * * *')  // Every 5 minutes
+@Interval(300000)
 async healthCheck() {
-  // Check Redis connection
-  const redisHealth = await this.checkRedis();
+  try {
+    const activeStores = await this.storesRepository.getAllActiveStores();
+    this.logger.debug(`Health check: ${activeStores.length} active stores`);
 
-  // Check Supabase connection
-  const dbHealth = await this.checkDatabase();
-
-  // Log results
-  console.log('Health check:', { redisHealth, dbHealth });
-}
-```
-
-### Cleanup old jobs
-
-Remove completed jobs to prevent database bloat:
-
-```typescript
-@Cron('0 2 * * *')  // Daily at 2 AM
-async cleanupOldJobs() {
-  const queues = ['products', 'orders', 'returns'];
-
-  for (const queueName of queues) {
-    const queue = this.getQueue(queueName);
+    // Optional: check Redis/Supabase connectivity
+  } catch (error) {
+    this.logger.error('Health check failed', error);
     
-    // Remove completed jobs older than 7 days
-    await queue.clean(7 * 24 * 60 * 60 * 1000, 'completed');
-    
-    // Remove failed jobs older than 14 days
-    await queue.clean(14 * 24 * 60 * 60 * 1000, 'failed');
+    await this.alertsRepository.createAlert({
+      store_id: null,
+      alert_type: 'health_check_failure',
+      message: `Health check failed: ${error.message}`,
+      severity: 'critical',
+    });
   }
 }
 ```
+
+### cleanupOldJobs() — Queue maintenance
+
+**Interval:** Daily (86,400,000ms)
+
+```typescript
+@Interval(86400000)
+async cleanupOldJobs() {
+  try {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;  // 7 days
+
+    await Promise.all([
+      this.productsQueue.clean(cutoff, 1000, 'completed'),
+      this.ordersQueue.clean(cutoff, 1000, 'completed'),
+      this.returnsQueue.clean(cutoff, 1000, 'completed'),
+    ]);
+
+    this.logger.log('Cleaned old completed jobs');
+  } catch (error) {
+    this.logger.error('Cleanup old jobs failed', error);
+    
+    await this.alertsRepository.createAlert({
+      store_id: null,
+      alert_type: 'cleanup_failure',
+      message: `Cleanup failed: ${error.message}`,
+      severity: 'medium',
+    });
+  }
+}
+```
+
+**Note:** The cleanup task removes completed jobs older than 7 days, keeping the last 1000 jobs per queue.
 
 ## Monitoring jobs
 
