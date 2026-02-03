@@ -51,12 +51,18 @@ Create environment files for both the backend and frontend.
     ```bash
     SUPABASE_URL=https://your-supabase-url.supabase.co
     SUPABASE_SERVICE_KEY=your-service-key
+    CREDENTIALS_ENCRYPTION_KEY=your-64-char-hex-key
     REDIS_HOST=127.0.0.1
     REDIS_PORT=6379
     REDIS_PASSWORD=
     FRONTEND_URL=http://localhost:3000
     PORT=3001
     NODE_ENV=development
+    ```
+
+    **Generate encryption key:**
+    ```bash
+    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
     ```
 
     <Warning>
