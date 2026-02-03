@@ -152,27 +152,94 @@ Services contain business logic and interact with external APIs or databases.
 
 **Location:** `backend/src/connectors/[platform]/[platform].service.ts`
 
-**Example:**
+**Actual Shopify service example:**
 
 ```typescript
 @Injectable()
 export class ShopifyService {
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly productsRepository: ProductsRepository,
-  ) {}
+  private readonly logger = new Logger(ShopifyService.name);
+  private client: GraphQLClient;
+  private shop: string;
+  private accessToken: string;
+  private apiVersion = '2026-01';
 
-  async fetchProducts(storeId: string) {
-    // Fetch from Shopify API
-    const response = await this.httpService.get(/* ... */);
-    
-    // Save to database
-    await this.productsRepository.bulkUpsert(response.data);
-    
-    return response.data;
+  constructor(private crypto: CryptoService) {}
+
+  /* Initialize with encrypted credentials */
+  initialize(credentials: any): void {
+    this.shop = this.crypto.decrypt(credentials.shopDomain);
+    this.accessToken = this.crypto.decrypt(credentials.accessToken);
+
+    if (!this.shop || !this.accessToken) {
+      throw new Error('Critical Shopify Configuration Missing');
+    }
+
+    this.client = new GraphQLClient(
+      `https://${this.shop}/admin/api/${this.apiVersion}/graphql.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': this.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  }
+
+  /* Fetch products with retry logic */
+  async fetchProducts(): Promise<ShopifyProductNode[]> {
+    const data = await this.execute<FetchProductsQuery>(
+      FETCH_PRODUCTS,
+      undefined,
+      'fetchProducts'
+    );
+
+    return data?.products?.nodes || [];
+  }
+
+  /* Execute GraphQL with exponential backoff */
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    context: string,
+    maxRetries = 5,
+    baseDelayMs = 1000,
+  ): Promise<T> {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        attempt++;
+        const status = err?.response?.status;
+        const isThrottle = err?.response?.errors?.some(e =>
+          String(e.message).toLowerCase().includes('throttle')
+        );
+
+        const retryable = status === 429 || status >= 500 || isThrottle;
+
+        if (!retryable || attempt > maxRetries) {
+          throw err;
+        }
+
+        const backoff = baseDelayMs * Math.pow(2, attempt - 1) +
+          Math.floor(Math.random() * 300);
+
+        this.logger.warn(
+          `Shopify retry ${attempt}/${maxRetries} in ${backoff}ms`
+        );
+
+        await this.sleep(backoff);
+      }
+    }
   }
 }
 ```
+
+**Key features:**
+- **Credential decryption** — Uses CryptoService to decrypt stored credentials
+- **GraphQL client** — Uses `graphql-request` for Shopify Admin API
+- **Retry logic** — Exponential backoff with jitter for rate limits
+- **API versioning** — Currently using Shopify API version 2026-01
 
 ### Repositories
 
