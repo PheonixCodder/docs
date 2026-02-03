@@ -68,26 +68,38 @@ graph LR
 4. **Completed** — Job finishes successfully
 5. **Failed** — Job fails after all retries
 
-### Job configuration
+### Actual job configuration
 
-Jobs are configured with retry logic and cleanup policies:
+Jobs created by TasksService use enhanced retry logic:
 
 ```typescript
-{
-  attempts: 3,                    // Retry up to 3 times
-  backoff: {
-    type: 'exponential',          // Exponential backoff
-    delay: 5000,                  // Start with 5 second delay
+// From tasks.service.ts
+await this.productsQueue.add(
+  `${store.platform}.products`,
+  {
+    storeId: store.id,
+    platform: store.platform,
+    orgId: store.org_id || 'unknown',
+    credentials,
+    since,  // Incremental sync timestamp
   },
-  removeOnComplete: {
-    age: 7 * 24 * 60 * 60,       // Remove after 7 days
-    count: 1000,                  // Keep last 1000 jobs
-  },
-  removeOnFail: {
-    age: 14 * 24 * 60 * 60,      // Remove after 14 days
-  },
-}
+  {
+    jobId: `products-${store.id}-${Date.now()}`,
+    removeOnComplete: true,
+    attempts: 5,  // 5 retries (not 3)
+    backoff: { 
+      type: 'exponential', 
+      delay: 5000  // 5 second base delay
+    },
+    removeOnFail: false,  // Keep failed jobs for debugging
+  }
+);
 ```
+
+**Cleanup policy:**
+- Completed jobs: Removed after 7 days (via daily cleanup task)
+- Failed jobs: Kept indefinitely for debugging
+- Cleanup runs daily at variable times via `@Interval(86400000)`
 
 ## Creating jobs
 
