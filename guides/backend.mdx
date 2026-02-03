@@ -385,6 +385,87 @@ export class StoresRepository {
 - **Alert integration** — Creates alerts on failures
 - **Health tracking** — Updates timestamps and status
 
+## Platform Service Factory
+
+CrossConnect-Phos uses a factory pattern to create platform-specific service instances:
+
+```typescript
+@Injectable()
+export class PlatformServiceFactory {
+  constructor(
+    private readonly faireService: FaireService,
+    private readonly targetService: TargetService,
+    private readonly walmartService: WalmartService,
+    private readonly amazonService: AmazonService,
+    private readonly shopifyService: ShopifyService,
+    private readonly warehanceService: WarehanceService,
+    private readonly tiktokService: TikTokService,
+  ) {}
+
+  async createService(
+    platform: PlatformType,
+    credentials: any,
+    store: Store,
+  ): Promise<PlatformService> {
+    let service: PlatformService;
+
+    switch (platform) {
+      case 'shopify':
+        service = this.shopifyService;
+        break;
+      case 'amazon':
+        service = this.amazonService;
+        break;
+      case 'tiktok':
+        service = this.tiktokService;
+        break;
+      // ... other platforms
+      default:
+        throw new Error(`Unsupported platform: ${platform}`);
+    }
+
+    // Initialize service with decrypted credentials
+    service.initialize(credentials, store);
+    return service;
+  }
+}
+```
+
+**Benefits:**
+- Centralized service creation
+- Consistent initialization pattern
+- Type-safe platform routing
+- Easy to add new platforms
+
+**Usage in job processors:**
+
+```typescript
+@Processor('products')
+export class ProductsProcessor {
+  constructor(
+    private readonly platformFactory: PlatformServiceFactory,
+  ) {}
+
+  async process(job: Job) {
+    const { platform, storeId } = job.data;
+    
+    // Get credentials
+    const credentials = await this.getCredentials(storeId);
+    const store = await this.getStore(storeId);
+
+    // Create platform-specific service
+    const service = await this.platformFactory.createService(
+      platform,
+      credentials,
+      store,
+    );
+
+    // Use service (type-safe)
+    const products = await service.fetchProducts();
+  }
+}
+```
+
 ## Adding a new connector
 
 To add support for a new marketplace or warehouse platform:
