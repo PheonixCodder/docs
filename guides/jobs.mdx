@@ -13,15 +13,39 @@ Three main queues process different types of data:
 
 <CardGroup cols={3}>
   <Card title="Products queue" icon="box">
-    Synchronizes product data from marketplaces
+    Synchronizes product and inventory data (concurrency: 5)
   </Card>
   <Card title="Orders queue" icon="receipt">
-    Synchronizes order data from marketplaces
+    Synchronizes order and order items data
   </Card>
   <Card title="Returns queue" icon="rotate-left">
-    Synchronizes return data from marketplaces
+    Synchronizes returns (Amazon, Walmart, Shopify, Target only)
   </Card>
 </CardGroup>
+
+### Queue configuration
+
+Each queue is configured in `JobsModule` with:
+
+```typescript
+BullModule.registerQueue({
+  name: 'products',
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,  // 2 seconds base delay
+    },
+    removeOnComplete: true,
+    removeOnFail: false,
+  },
+})
+```
+
+**Job naming convention:**
+- Products: `products-{storeId}-{timestamp}`
+- Orders: `orders-{storeId}-{timestamp}`
+- Returns: `returns-{storeId}-{timestamp}`
 
 ## How jobs work
 
@@ -44,26 +68,38 @@ graph LR
 4. **Completed** — Job finishes successfully
 5. **Failed** — Job fails after all retries
 
-### Job configuration
+### Actual job configuration
 
-Jobs are configured with retry logic and cleanup policies:
+Jobs created by TasksService use enhanced retry logic:
 
 ```typescript
-{
-  attempts: 3,                    // Retry up to 3 times
-  backoff: {
-    type: 'exponential',          // Exponential backoff
-    delay: 5000,                  // Start with 5 second delay
+// From tasks.service.ts
+await this.productsQueue.add(
+  `${store.platform}.products`,
+  {
+    storeId: store.id,
+    platform: store.platform,
+    orgId: store.org_id || 'unknown',
+    credentials,
+    since,  // Incremental sync timestamp
   },
-  removeOnComplete: {
-    age: 7 * 24 * 60 * 60,       // Remove after 7 days
-    count: 1000,                  // Keep last 1000 jobs
-  },
-  removeOnFail: {
-    age: 14 * 24 * 60 * 60,      // Remove after 14 days
-  },
-}
+  {
+    jobId: `products-${store.id}-${Date.now()}`,
+    removeOnComplete: true,
+    attempts: 5,  // 5 retries (not 3)
+    backoff: { 
+      type: 'exponential', 
+      delay: 5000  // 5 second base delay
+    },
+    removeOnFail: false,  // Keep failed jobs for debugging
+  }
+);
 ```
+
+**Cleanup policy:**
+- Completed jobs: Removed after 7 days (via daily cleanup task)
+- Failed jobs: Kept indefinitely for debugging
+- Cleanup runs daily at variable times via `@Interval(86400000)`
 
 ## Creating jobs
 
@@ -110,63 +146,135 @@ await this.productsQueue.add(
 
 ## Processing jobs
 
-### Creating a processor
+### ProductsProcessor (actual implementation)
 
-Processors handle job execution:
+The `ProductsProcessor` handles all platform-specific product synchronization:
 
 ```typescript
-import { Processor, Process } from '@nestjs/bull';
-import { Job } from 'bull';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Job } from 'bullmq';
 
-@Processor('products')
-export class ProductsProcessor {
+@Processor('products', { concurrency: 5 })
+export class ProductsProcessor extends WorkerHost {
   constructor(
-    private readonly shopifyService: ShopifyService,
-    private readonly productsRepository: ProductsRepository,
-  ) {}
+    private readonly platformFactory: PlatformServiceFactory,
+    private readonly productsRepo: ProductsRepository,
+    private readonly inventoryRepo: InventoryRepository,
+    private readonly storeRepo: StoresRepository,
+    private readonly storeCredentialsService: StoreCredentialsService,
+    private readonly alertsRepo: AlertsRepository,
+  ) {
+    super();
+  }
 
-  @Process('sync')
-  async handleProductSync(job: Job) {
+  async process(job: Job): Promise<void> {
     const { storeId, platform } = job.data;
 
-    // Update job progress
-    await job.progress(10);
+    // 1. Get store and credentials
+    const store = await this.storeRepo.getStoreById(storeId);
+    const credentials = await this.storeCredentialsService
+      .getCredentialsByStoreId(storeId);
 
-    // Fetch products from platform
-    const products = await this.shopifyService.fetchProducts(storeId);
-    await job.progress(50);
+    // 2. Create platform-specific service
+    const service = await this.platformFactory.createService(
+      platform,
+      credentials,
+      store,
+    );
 
-    // Save to database
-    await this.productsRepository.bulkUpsert(products);
-    await job.progress(100);
+    // 3. Route to platform-specific handler
+    switch (platform) {
+      case 'shopify':
+        await this.processShopifyProducts(service, store);
+        break;
+      case 'amazon':
+        await this.processAmazonProducts(service, store);
+        break;
+      // ... other platforms
+    }
 
-    return {
-      success: true,
-      productsCount: products.length,
-    };
+    // 4. Update sync timestamps
+    await this.supabaseClient
+      .from('stores')
+      .update({
+        last_synced_at: new Date().toISOString(),
+        last_products_synced_at: new Date().toISOString(),
+      })
+      .eq('id', store.id);
+
+    // 5. Update store health
+    await this.storeRepo.updateStoreHealth(storeId, 'healthy');
   }
 }
 ```
 
-### Error handling
+**Key features:**
+- **Concurrency: 5** — Processes up to 5 jobs simultaneously
+- **Platform factory pattern** — Dynamically creates service instances
+- **Delta sync** — Uses `since` parameter for incremental updates
+- **Atomic operations** — Products and inventory synced together
+- **Health tracking** — Updates store status on success/failure
+- **Alert creation** — Logs failures to alerts table
 
-Handle errors gracefully:
+### Error handling (actual implementation)
+
+CrossConnect-Phos implements comprehensive error handling:
 
 ```typescript
-@Process('sync')
-async handleProductSync(job: Job) {
+private async processShopifyProducts(service, store) {
   try {
-    // Process job
-    return { success: true };
-  } catch (error) {
-    // Log error
-    console.error('Job failed:', error);
+    // 1. Fetch products with error boundary
+    const products = await service.fetchProducts();
+    
+    if (!products.length) {
+      this.logger.warn('No products found. Skipping.');
+      return;
+    }
 
-    // Throw to trigger retry
+    // 2. Map and insert products
+    const productRows = products.flatMap(p => 
+      mapShopifyProductToDB(p, store.id)
+    );
+    await this.productsRepo.insertProducts(productRows);
+
+    // 3. Sync inventory with delta detection
+    const inventoryItems = await service.fetchInventory(since);
+    // ... inventory processing
+
+  } catch (error) {
+    this.logger.error(
+      `Shopify products failed for store ${store.id}`,
+      error.stack
+    );
+
+    // Update store health
+    await this.storeRepo.updateStoreHealth(
+      store.id,
+      'unhealthy',
+      `Products sync failed: ${error.message}`
+    );
+
+    // Create alert
+    await this.alertsRepo.createAlert({
+      store_id: store.id,
+      alert_type: 'products_sync_failure',
+      message: `Shopify products sync failed: ${error.message}`,
+      severity: 'high',
+      platform: 'shopify',
+    });
+
+    // Re-throw to trigger BullMQ retry
     throw error;
   }
 }
 ```
+
+**Error handling features:**
+- Detailed error logging with stack traces
+- Store health status updates
+- Alert creation for monitoring
+- Automatic retry via BullMQ
+- Platform-specific error messages
 
 ### Job events
 
@@ -192,76 +300,128 @@ export class ProductsProcessor {
 }
 ```
 
-## Scheduled jobs
+## Scheduled jobs (actual implementation)
 
-The TasksService schedules recurring jobs using NestJS Schedule.
+The TasksService uses `@Interval` decorators (not cron) for scheduling:
 
-### Polling stores
+### pollAllActiveStores() — Main sync orchestrator
 
-The service polls active stores and enqueues sync jobs:
+**Not currently scheduled** — Must be triggered manually or via external scheduler
 
 ```typescript
-@Injectable()
-export class TasksService {
-  @Cron('*/15 * * * *')  // Every 15 minutes
-  async pollStores() {
-    const activeStores = await this.storesRepository.findActive();
+async pollAllActiveStores() {
+  this.logger.log('Starting scheduled poll of all active stores');
 
-    for (const store of activeStores) {
-      // Enqueue product sync
-      await this.productsQueue.add('sync', {
-        storeId: store.id,
-        platform: store.platform,
-      });
+  // 1. Fetch active stores with credentials
+  const storesWithCredentials = 
+    await this.storeCredentialsService.getActiveStoresWithCredentials();
 
-      // Enqueue order sync
-      await this.ordersQueue.add('sync', {
-        storeId: store.id,
+  if (storesWithCredentials.length === 0) {
+    this.logger.warn('No active stores with credentials found');
+    return;
+  }
+
+  // 2. Process each store sequentially
+  for (const { store, credentials } of storesWithCredentials) {
+    try {
+      // Validate credentials
+      if (!credentials || Object.keys(credentials).length === 0) {
+        this.logger.warn(`No credentials for store ${store.id}`);
+        continue;
+      }
+
+      // Get incremental sync timestamp
+      const since = store.last_synced_at
+        ? new Date(store.last_synced_at).toISOString()
+        : undefined;
+
+      // Queue all three job types
+      await this.queueProductsJob(store, credentials, since);
+      await this.queueOrdersJob(store, credentials, since);
+      await this.queueReturnsJob(store, credentials, since);
+
+      // 500ms delay to prevent rate limiting
+      await new Promise(r => setTimeout(r, 500));
+
+    } catch (error) {
+      // Update store health and create alert
+      await this.storesRepository.updateStoreHealth(
+        store.id,
+        'unhealthy',
+        `Failed to queue sync jobs: ${error.message}`
+      );
+
+      await this.alertsRepository.createAlert({
+        store_id: store.id,
+        alert_type: 'sync_queue_failure',
+        message: `Failed to queue jobs: ${error.message}`,
+        severity: 'high',
         platform: store.platform,
       });
     }
   }
+
+  // 3. Mark stores as queued (bulk update)
+  await this.markStoresAsQueued(queuedStores);
 }
 ```
 
-### Health checks
+### healthCheck() — System monitoring
 
-Regular health checks ensure system stability:
+**Interval:** Every 5 minutes (300,000ms)
 
 ```typescript
-@Cron('*/5 * * * *')  // Every 5 minutes
+@Interval(300000)
 async healthCheck() {
-  // Check Redis connection
-  const redisHealth = await this.checkRedis();
+  try {
+    const activeStores = await this.storesRepository.getAllActiveStores();
+    this.logger.debug(`Health check: ${activeStores.length} active stores`);
 
-  // Check Supabase connection
-  const dbHealth = await this.checkDatabase();
-
-  // Log results
-  console.log('Health check:', { redisHealth, dbHealth });
-}
-```
-
-### Cleanup old jobs
-
-Remove completed jobs to prevent database bloat:
-
-```typescript
-@Cron('0 2 * * *')  // Daily at 2 AM
-async cleanupOldJobs() {
-  const queues = ['products', 'orders', 'returns'];
-
-  for (const queueName of queues) {
-    const queue = this.getQueue(queueName);
+    // Optional: check Redis/Supabase connectivity
+  } catch (error) {
+    this.logger.error('Health check failed', error);
     
-    // Remove completed jobs older than 7 days
-    await queue.clean(7 * 24 * 60 * 60 * 1000, 'completed');
-    
-    // Remove failed jobs older than 14 days
-    await queue.clean(14 * 24 * 60 * 60 * 1000, 'failed');
+    await this.alertsRepository.createAlert({
+      store_id: null,
+      alert_type: 'health_check_failure',
+      message: `Health check failed: ${error.message}`,
+      severity: 'critical',
+    });
   }
 }
 ```
+
+### cleanupOldJobs() — Queue maintenance
+
+**Interval:** Daily (86,400,000ms)
+
+```typescript
+@Interval(86400000)
+async cleanupOldJobs() {
+  try {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;  // 7 days
+
+    await Promise.all([
+      this.productsQueue.clean(cutoff, 1000, 'completed'),
+      this.ordersQueue.clean(cutoff, 1000, 'completed'),
+      this.returnsQueue.clean(cutoff, 1000, 'completed'),
+    ]);
+
+    this.logger.log('Cleaned old completed jobs');
+  } catch (error) {
+    this.logger.error('Cleanup old jobs failed', error);
+    
+    await this.alertsRepository.createAlert({
+      store_id: null,
+      alert_type: 'cleanup_failure',
+      message: `Cleanup failed: ${error.message}`,
+      severity: 'medium',
+    });
+  }
+}
+```
+
+**Note:** The cleanup task removes completed jobs older than 7 days, keeping the last 1000 jobs per queue.
 
 ## Monitoring jobs
 
@@ -410,6 +570,138 @@ Access the dashboard at `/admin/queues`.
     ```
   </Accordion>
 </AccordionGroup>
+
+## Platform-specific processing
+
+Each platform has unique sync logic in the ProductsProcessor:
+
+### Shopify sync flow
+
+```typescript
+private async processShopifyProducts(service: ShopifyService, store) {
+  // 1. Fetch products via GraphQL
+  const products = await service.fetchProducts();
+  
+  // 2. Map and insert products
+  const productRows = products.flatMap(p => 
+    mapShopifyProductToDB(p, store.id)
+  );
+  await this.productsRepo.insertProducts(productRows);
+
+  // 3. Resolve SKU → product_id mapping
+  const productIdRows = await this.productsRepo
+    .getProductIdsBySkusInBatches(store.id, skus, 'shopify');
+
+  // 4. Fetch inventory with delta sync
+  const inventoryItems = await service.fetchInventory(since);
+
+  // 5. Delta comparison and upsert
+  const existingInventory = await this.inventoryRepo.getBySkus(skus, store.id);
+  
+  for (const item of inventoryItems) {
+    const existing = existingInventory[item.sku];
+    if (!existing || shouldUpdateShopifyInventory(existing, next)) {
+      inventoryUpserts.push(next);
+    }
+  }
+
+  await this.inventoryRepo.updateInventoryBatch(inventoryUpserts);
+}
+```
+
+### Walmart sync flow
+
+```typescript
+private async processWalmartProducts(service: WalmartService, store) {
+  // 1. Fetch all products
+  const walmartProducts = await service.getProducts();
+
+  // 2. Upsert products
+  const productInserts = mapWalmartProductToDB(walmartProducts, store.id);
+  await this.productsRepo.insertProducts(productInserts);
+
+  // 3. Adaptive inventory fetch (rate-limited)
+  await fetchInventoryAdaptive(productInserts, {
+    batchSize: 3,
+    initialDelayMs: 500,
+    maxRetries: 3,
+    handler: async (product) => {
+      const inventory = await service.getInventory(product);
+      // Delta check and upsert
+    },
+  });
+}
+```
+
+**Adaptive fetching** prevents rate limiting by:
+- Processing in small batches (3 items)
+- Adding delays between requests (500ms)
+- Implementing exponential backoff on errors
+
+### TikTok sync flow
+
+```typescript
+private async processTiktokProducts(service: TikTokService, store) {
+  // 1. Fetch products (paginated)
+  const products = await service.getAllProducts(store.id);
+
+  // 2. Map and upsert products
+  const productRows = products.flatMap(p => 
+    mapTiktokProductToDB(p, store.id)
+  );
+  await this.productsRepo.insertProducts(productRows);
+
+  // 3. Fetch inventory in batches (max 50 product IDs per request)
+  const productIds = [...new Set(products.map(p => p.id))];
+  
+  for (let i = 0; i < productIds.length; i += 50) {
+    const batch = productIds.slice(i, i + 50);
+    const inventories = await service.getProductInventories(store.id, batch);
+    
+    // Process inventory with delta detection
+    for (const inv of inventories) {
+      // Map and compare with existing
+    }
+  }
+}
+```
+
+**TikTok-specific constraints:**
+- Maximum 50 product IDs per inventory request
+- Requires batching for large catalogs
+
+### Amazon sync flow
+
+```typescript
+private async processAmazonProducts(service: AmazonService, store) {
+  // 1. Fetch listings report
+  const listings = await service.getAllProducts(store);
+
+  // 2. Upsert products
+  const productInserts = listings.map(row => 
+    mapAmazonProductToSupabaseProduct(row, store.id)
+  );
+  await this.productsRepo.insertProducts(productInserts);
+
+  // 3. Fetch FBA inventory summaries
+  const inventorySummaries = await service.getInventorySummaries(store, since);
+
+  // 4. Delta comparison
+  for (const summary of inventorySummaries) {
+    const existing = existingInventory[summary.sellerSku];
+    if (!existing || shouldUpdateAmazonInventory(existing, mapped)) {
+      inventoryInserts.push(mapped);
+    }
+  }
+
+  await this.inventoryRepo.updateInventoryBatch(inventoryInserts);
+}
+```
+
+**Amazon-specific features:**
+- Uses Merchant Listings Report for products
+- FBA Inventory API for stock levels
+- Supports incremental sync via `since` parameter
 
 ## Advanced patterns
 

@@ -13,17 +13,104 @@ The CrossConnect-Phos backend is built with NestJS, a progressive Node.js framew
 backend/
 ├── src/
 │   ├── api/
-│   │   └── webhooks/         # Webhook handlers
-│   ├── connectors/           # Platform integrations
-│   ├── jobs/                 # Background job processors
-│   ├── supabase/            # Database repositories
-│   ├── tasks/               # Scheduled tasks
-│   ├── app.module.ts        # Root module
-│   └── main.ts              # Application entry point
-├── test/                    # E2E tests
-├── .env                     # Environment variables
+│   │   └── webhooks/
+│   │       ├── connectors/
+│   │       │   ├── shopify/      # Shopify webhook handlers
+│   │       │   ├── tiktok/       # TikTok webhook handlers
+│   │       │   └── walmart/      # Walmart webhook handlers
+│   │       ├── guards/           # Webhook signature validation
+│   │       └── webhooks.module.ts
+│   ├── common/
+│   │   ├── crypto.service.ts    # Encryption/decryption
+│   │   └── guards/              # Auth guards
+│   ├── config/
+│   │   ├── config.module.ts
+│   │   └── env.validation.ts    # Environment validation schema
+│   ├── connectors/
+│   │   ├── amazon/              # Amazon SP-API connector
+│   │   ├── faire/               # Faire API connector
+│   │   ├── shopify/             # Shopify GraphQL connector
+│   │   ├── target/              # Target API connector
+│   │   ├── tiktok/              # TikTok Shop API connector
+│   │   ├── walmart/             # Walmart API connector
+│   │   ├── warehouse/           # Warehance WMS connector
+│   │   ├── oauth/               # OAuth services
+│   │   ├── platform-factory.service.ts
+│   │   └── connectors.module.ts
+│   ├── jobs/
+│   │   ├── products.jobs.ts     # ProductsProcessor
+│   │   ├── orders.jobs.ts       # OrdersProcessor
+│   │   ├── returns.jobs.ts      # ReturnsProcessor
+│   │   └── jobs.module.ts
+│   ├── libs/
+│   │   └── tiktok/              # Generated TikTok SDK
+│   ├── supabase/
+│   │   ├── repositories/        # Database access layer
+│   │   ├── supabase.module.ts
+│   │   └── supabase.types.ts    # Generated DB types
+│   ├── tasks/
+│   │   ├── tasks.service.ts     # Scheduled tasks
+│   │   └── tasks.module.ts
+│   ├── types/
+│   │   └── global.d.ts
+│   ├── app.module.ts            # Root module
+│   ├── app.controller.ts
+│   ├── main.ts                  # Application entry point
+│   └── newrelic.ts              # New Relic config
+├── .api/                        # OpenAPI specs
+├── test/                        # E2E tests
+├── .env                         # Environment variables
 └── package.json
 ```
+
+## Application bootstrap
+
+The `main.ts` file configures the NestJS application:
+
+```typescript
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,      // Required for webhook signature validation
+    bufferLogs: true,   // Buffer logs until logger is ready
+  });
+
+  // Enable CORS for frontend
+  app.enableCors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+  });
+
+  // Global validation pipe
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,              // Auto-transform payloads to DTO types
+      whitelist: true,              // Strip unknown properties
+      forbidNonWhitelisted: true,   // Throw error on unknown properties
+    })
+  );
+
+  // Use structured logging
+  app.useLogger(app.get(Logger));
+
+  // Global prefix for API routes
+  app.setGlobalPrefix('api', {
+    exclude: ['/'],  // Exclude root path
+  });
+
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port);
+
+  const logger = app.get(Logger);
+  logger.log(`Application is running on: http://localhost:${port}`);
+}
+```
+
+**Key configurations:**
+- **Raw body** — Enables webhook signature validation
+- **CORS** — Restricted to `FRONTEND_URL` only
+- **Validation** — Automatic DTO validation and transformation
+- **Global prefix** — All routes prefixed with `/api`
+- **Structured logging** — Uses nestjs-pino for JSON logs
 
 ## Development workflow
 
@@ -36,7 +123,7 @@ cd backend
 npm run start:dev
 ```
 
-The server will start on the port specified in your `.env` file (default: 3001).
+The server will start on the port specified in your `.env` file (default: 3000, recommended: 3001).
 
 ### Available scripts
 
@@ -114,57 +201,267 @@ Services contain business logic and interact with external APIs or databases.
 
 **Location:** `backend/src/connectors/[platform]/[platform].service.ts`
 
-**Example:**
+**Actual Shopify service example:**
 
 ```typescript
 @Injectable()
 export class ShopifyService {
-  constructor(
-    private readonly httpService: HttpService,
-    private readonly productsRepository: ProductsRepository,
-  ) {}
+  private readonly logger = new Logger(ShopifyService.name);
+  private client: GraphQLClient;
+  private shop: string;
+  private accessToken: string;
+  private apiVersion = '2026-01';
 
-  async fetchProducts(storeId: string) {
-    // Fetch from Shopify API
-    const response = await this.httpService.get(/* ... */);
-    
-    // Save to database
-    await this.productsRepository.bulkUpsert(response.data);
-    
-    return response.data;
+  constructor(private crypto: CryptoService) {}
+
+  /* Initialize with encrypted credentials */
+  initialize(credentials: any): void {
+    this.shop = this.crypto.decrypt(credentials.shopDomain);
+    this.accessToken = this.crypto.decrypt(credentials.accessToken);
+
+    if (!this.shop || !this.accessToken) {
+      throw new Error('Critical Shopify Configuration Missing');
+    }
+
+    this.client = new GraphQLClient(
+      `https://${this.shop}/admin/api/${this.apiVersion}/graphql.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': this.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  }
+
+  /* Fetch products with retry logic */
+  async fetchProducts(): Promise<ShopifyProductNode[]> {
+    const data = await this.execute<FetchProductsQuery>(
+      FETCH_PRODUCTS,
+      undefined,
+      'fetchProducts'
+    );
+
+    return data?.products?.nodes || [];
+  }
+
+  /* Execute GraphQL with exponential backoff */
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    context: string,
+    maxRetries = 5,
+    baseDelayMs = 1000,
+  ): Promise<T> {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        attempt++;
+        const status = err?.response?.status;
+        const isThrottle = err?.response?.errors?.some(e =>
+          String(e.message).toLowerCase().includes('throttle')
+        );
+
+        const retryable = status === 429 || status >= 500 || isThrottle;
+
+        if (!retryable || attempt > maxRetries) {
+          throw err;
+        }
+
+        const backoff = baseDelayMs * Math.pow(2, attempt - 1) +
+          Math.floor(Math.random() * 300);
+
+        this.logger.warn(
+          `Shopify retry ${attempt}/${maxRetries} in ${backoff}ms`
+        );
+
+        await this.sleep(backoff);
+      }
+    }
   }
 }
 ```
 
+**Key features:**
+- **Credential decryption** — Uses CryptoService to decrypt stored credentials
+- **GraphQL client** — Uses `graphql-request` for Shopify Admin API
+- **Retry logic** — Exponential backoff with jitter for rate limits
+- **API versioning** — Currently using Shopify API version 2026-01
+
 ### Repositories
 
-Repositories handle database operations with Supabase.
+Repositories handle database operations with Supabase using `nestjs-supabase-js`.
 
 **Location:** `backend/src/supabase/repositories/`
 
-**Example:**
+**Actual StoresRepository example:**
 
 ```typescript
 @Injectable()
-export class ProductsRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+export class StoresRepository {
+  private logger = new Logger(StoresRepository.name);
 
-  async findByStoreId(storeId: string) {
-    const { data, error } = await this.supabase
-      .from('products')
+  constructor(
+    @InjectSupabaseClient()
+    private readonly supabaseClient: SupabaseClient<Database>,
+  ) {}
+
+  async getAllActiveStores(): Promise<Database['public']['Tables']['stores']['Row'][]> {
+    const { data, error } = await this.supabaseClient
+      .from('stores')
       .select('*')
-      .eq('store_id', storeId);
+      .eq('auth_status', 'active');
 
-    if (error) throw error;
-    return data;
+    if (error) {
+      this.logger.error('Failed to fetch active stores', error);
+      throw error;
+    }
+
+    return data || [];
   }
 
-  async bulkUpsert(products: Product[]) {
-    const { error } = await this.supabase
-      .from('products')
-      .upsert(products);
+  async updateStoreHealth(
+    storeId: string,
+    status: 'healthy' | 'unhealthy',
+    message?: string,
+  ): Promise<void> {
+    const { error } = await this.supabaseClient
+      .from('stores')
+      .update({
+        last_health_check: new Date().toISOString(),
+        auth_status: status === 'healthy' ? 'active' : 'inactive',
+      })
+      .eq('id', storeId);
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Failed to update store health`, error);
+    }
+
+    // Create alert if unhealthy
+    if (status === 'unhealthy') {
+      await this.createAlert(
+        storeId,
+        'store_health_check',
+        message || 'Store connection failed',
+        'high',
+      );
+    }
+  }
+
+  async updateWebhookStatus(storeId: string, status: boolean): Promise<void> {
+    const { error } = await this.supabaseClient
+      .from('stores')
+      .update({
+        webhook_status: status,
+        auth_status: status ? 'active' : 'inactive',
+      })
+      .eq('id', storeId);
+
+    if (error) {
+      this.logger.error(`Failed to update webhook status`, error);
+    }
+  }
+
+  async storesAsQueued(storeIds: string[]) {
+    const now = new Date().toISOString();
+
+    return await this.supabaseClient
+      .from('stores')
+      .update({
+        last_health_check: now,
+        auth_status: 'active',
+      })
+      .in('id', storeIds);
+  }
+}
+```
+
+**Key patterns:**
+- **Type safety** — Uses generated Supabase types
+- **Error logging** — Logs all database errors
+- **Bulk operations** — Uses `.in()` for batch updates
+- **Alert integration** — Creates alerts on failures
+- **Health tracking** — Updates timestamps and status
+
+## Platform Service Factory
+
+CrossConnect-Phos uses a factory pattern to create platform-specific service instances:
+
+```typescript
+@Injectable()
+export class PlatformServiceFactory {
+  constructor(
+    private readonly faireService: FaireService,
+    private readonly targetService: TargetService,
+    private readonly walmartService: WalmartService,
+    private readonly amazonService: AmazonService,
+    private readonly shopifyService: ShopifyService,
+    private readonly warehanceService: WarehanceService,
+    private readonly tiktokService: TikTokService,
+  ) {}
+
+  async createService(
+    platform: PlatformType,
+    credentials: any,
+    store: Store,
+  ): Promise<PlatformService> {
+    let service: PlatformService;
+
+    switch (platform) {
+      case 'shopify':
+        service = this.shopifyService;
+        break;
+      case 'amazon':
+        service = this.amazonService;
+        break;
+      case 'tiktok':
+        service = this.tiktokService;
+        break;
+      // ... other platforms
+      default:
+        throw new Error(`Unsupported platform: ${platform}`);
+    }
+
+    // Initialize service with decrypted credentials
+    service.initialize(credentials, store);
+    return service;
+  }
+}
+```
+
+**Benefits:**
+- Centralized service creation
+- Consistent initialization pattern
+- Type-safe platform routing
+- Easy to add new platforms
+
+**Usage in job processors:**
+
+```typescript
+@Processor('products')
+export class ProductsProcessor {
+  constructor(
+    private readonly platformFactory: PlatformServiceFactory,
+  ) {}
+
+  async process(job: Job) {
+    const { platform, storeId } = job.data;
+    
+    // Get credentials
+    const credentials = await this.getCredentials(storeId);
+    const store = await this.getStore(storeId);
+
+    // Create platform-specific service
+    const service = await this.platformFactory.createService(
+      platform,
+      credentials,
+      store,
+    );
+
+    // Use service (type-safe)
+    const products = await service.fetchProducts();
   }
 }
 ```

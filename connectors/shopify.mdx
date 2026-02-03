@@ -1,0 +1,474 @@
+---
+title: "Shopify connector"
+description: "Integrate with Shopify using GraphQL Admin API and webhooks"
+---
+
+## Overview
+
+The Shopify connector uses the Shopify Admin GraphQL API (version 2026-01) for data synchronization and supports real-time webhooks for instant updates.
+
+## Features
+
+<CardGroup cols={2}>
+  <Card title="GraphQL API" icon="code">
+    Uses Shopify Admin API 2026-01 with typed queries
+  </Card>
+  <Card title="Real-time webhooks" icon="webhook">
+    Instant notifications for products, orders, and inventory
+  </Card>
+  <Card title="Retry logic" icon="rotate">
+    Exponential backoff with jitter for rate limits
+  </Card>
+  <Card title="Delta sync" icon="clock">
+    Incremental updates using timestamps
+  </Card>
+</CardGroup>
+
+## Authentication
+
+### OAuth flow
+
+Shopify uses OAuth 2.0 for authentication:
+
+<Steps>
+  <Step title="Initiate OAuth">
+    Redirect user to Shopify authorization URL with your app credentials.
+  </Step>
+
+  <Step title="Handle callback">
+    Receive authorization code at your callback URL.
+  </Step>
+
+  <Step title="Exchange for access token">
+    Exchange code for permanent access token.
+  </Step>
+
+  <Step title="Store credentials">
+    Encrypt and store shop domain and access token in database.
+  </Step>
+</Steps>
+
+### Required credentials
+
+```typescript
+{
+  shopDomain: string;    // e.g., "mystore.myshopify.com"
+  accessToken: string;   // Permanent access token
+}
+```
+
+<Warning>
+  Credentials are encrypted using `CryptoService` before storage. Never store plain-text access tokens.
+</Warning>
+
+## Service initialization
+
+The ShopifyService must be initialized with credentials before use:
+
+```typescript
+@Injectable()
+export class ShopifyService {
+  private client: GraphQLClient;
+  private shop: string;
+  private accessToken: string;
+  private apiVersion = '2026-01';
+
+  constructor(private crypto: CryptoService) {}
+
+  initialize(credentials: any): void {
+    // Decrypt credentials
+    this.shop = this.crypto.decrypt(credentials.shopDomain);
+    this.accessToken = this.crypto.decrypt(credentials.accessToken);
+
+    if (!this.shop || !this.accessToken) {
+      throw new Error('Critical Shopify Configuration Missing');
+    }
+
+    // Create GraphQL client
+    this.client = new GraphQLClient(
+      `https://${this.shop}/admin/api/${this.apiVersion}/graphql.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': this.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  }
+}
+```
+
+## Data synchronization
+
+### Products
+
+Fetches all products with variants:
+
+```typescript
+async fetchProducts(): Promise<ShopifyProductNode[]> {
+  const data = await this.execute<FetchProductsQuery>(
+    FETCH_PRODUCTS,
+    undefined,
+    'fetchProducts'
+  );
+
+  return data?.products?.nodes || [];
+}
+```
+
+**GraphQL query:**
+
+```graphql
+query FetchProducts {
+  products(first: 250) {
+    nodes {
+      id
+      title
+      descriptionPlainSummary
+      status
+      variants(first: 100) {
+        nodes {
+          id
+          sku
+          price
+        }
+      }
+    }
+  }
+}
+```
+
+**Data mapping:**
+
+```typescript
+export function mapShopifyProductToDB(
+  product: ShopifyProductNode,
+  storeId: string,
+): Database['public']['Tables']['products']['Insert'][] {
+  return product.variants.nodes.map((variant) => {
+    const productId = product.id.split('/').pop();
+    const variantId = variant.id.split('/').pop();
+
+    // Namespace SKU to avoid conflicts
+    const sku = variant.sku
+      ? `shopify-${productId}-${variant.sku}`
+      : `shopify-${productId}-variant-${variantId}`;
+
+    return {
+      external_product_id: product.id,
+      platform: 'shopify',
+      store_id: storeId,
+      sku,
+      title: product.title,
+      description: product.descriptionPlainSummary || null,
+      price: variant.price ? Number(variant.price) : 0,
+      currency: 'USD',
+      status: product.status?.toLowerCase() ?? 'draft',
+    };
+  });
+}
+```
+
+### Inventory
+
+Supports delta sync using `updatedAt` filter:
+
+```typescript
+async fetchInventory(since?: string): Promise<ShopifyInventoryItemNode[]> {
+  const data = await this.execute<FetchInventoryLevelsQuery>(
+    FETCH_INVENTORY_LEVELS,
+    { since },  // GraphQL variable
+    'fetchInventory'
+  );
+
+  return data?.inventoryItems?.nodes || [];
+}
+```
+
+**Delta detection:**
+
+```typescript
+export function shouldUpdateShopifyInventory(
+  existing: Database['public']['Tables']['inventory']['Row'],
+  next: Database['public']['Tables']['inventory']['Insert'],
+): boolean {
+  return existing.platform_quantity !== next.platform_quantity;
+}
+```
+
+### Orders
+
+Fetches orders with line items:
+
+```typescript
+async fetchOrders(since?: string): Promise<ShopifyOrderNode[]> {
+  const filter = since ? `updated_at:>='${since}'` : '';
+
+  const data = await this.execute<FetchOrdersQuery>(
+    FETCH_ORDERS,
+    { since: filter },
+    'fetchOrders'
+  );
+
+  return data?.orders?.nodes || [];
+}
+```
+
+### Returns
+
+Fetches return requests:
+
+```typescript
+async fetchReturns(since?: string): Promise<ShopifyReturnEdge[]> {
+  const filter = since ? `updated_at:>='${since}'` : '';
+
+  const data = await this.execute<FetchReturnsQuery>(
+    FETCH_RETURNS,
+    { since: filter },
+    'fetchReturns'
+  );
+
+  return data?.orders?.edges || [];
+}
+```
+
+## Retry logic
+
+The service implements exponential backoff with jitter:
+
+```typescript
+private async withRetry<T>(
+  fn: () => Promise<T>,
+  context: string,
+  maxRetries = 5,
+  baseDelayMs = 1000,
+): Promise<T> {
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      attempt++;
+      
+      const status = err?.response?.status;
+      const isThrottle = err?.response?.errors?.some(e =>
+        String(e.message).toLowerCase().includes('throttle')
+      );
+
+      const retryable = status === 429 || status >= 500 || isThrottle;
+
+      if (!retryable || attempt > maxRetries) {
+        this.logger.error(
+          `Shopify API failed [${context}] after ${attempt} attempts`,
+          err?.stack ?? err
+        );
+        throw err;
+      }
+
+      // Exponential backoff with jitter
+      const backoff = baseDelayMs * Math.pow(2, attempt - 1) +
+        Math.floor(Math.random() * 300);
+
+      this.logger.warn(
+        `Shopify retry ${attempt}/${maxRetries} [${context}] in ${backoff}ms`
+      );
+
+      await this.sleep(backoff);
+    }
+  }
+}
+```
+
+**Retry conditions:**
+- HTTP 429 (rate limit)
+- HTTP 5xx (server errors)
+- GraphQL throttle errors
+- Max 5 retries with exponential backoff
+
+## Webhooks
+
+### Supported events
+
+- `products/create` — New product created
+- `products/update` — Product updated
+- `products/delete` — Product deleted
+- `orders/create` — New order placed
+- `orders/updated` — Order updated
+- `inventory_levels/update` — Inventory changed
+
+### Webhook setup
+
+The `ShopifyWebhookService` automatically creates webhooks:
+
+```typescript
+async reconcileWebhooks(
+  credentials: any,
+  storeId: string,
+  userId: string,
+  topics: string[],
+) {
+  this.shopify.initialize(credentials);
+
+  const baseUrl = `${this.config.get('APP_URL')}/api/webhooks/shopify/${storeId}/${userId}`;
+
+  // List existing webhooks
+  const existing = await this.shopify.execute<ListWebhooksQuery>(LIST_WEBHOOKS);
+  const existingTopics = new Set(
+    existing.webhookSubscriptions.nodes.map(w => w.topic)
+  );
+
+  // Create missing webhooks
+  for (const topic of topics) {
+    if (existingTopics.has(topic)) continue;
+
+    const res = await this.shopify.execute<WebhookCreateMutation>(
+      CREATE_WEBHOOK,
+      { topic, callbackUrl: baseUrl }
+    );
+
+    if (res.webhookSubscriptionCreate?.userErrors.length) {
+      throw new Error(JSON.stringify(res.webhookSubscriptionCreate.userErrors));
+    }
+
+    this.logger.log(`Created webhook: ${topic}`);
+  }
+}
+```
+
+### Webhook validation
+
+Webhooks are validated using HMAC-SHA256:
+
+```typescript
+@UseGuards(ShopifyWebhookGuard)
+@Post()
+async handleWebhook(
+  @Headers('x-shopify-topic') topic: string,
+  @Headers('x-shopify-shop-domain') shop: string,
+  @Body() payload: any,
+) {
+  // Guard validates signature before reaching this point
+  await this.webhookService.processWebhook(topic, payload, shop);
+  return { success: true };
+}
+```
+
+## Rate limiting
+
+Shopify enforces rate limits:
+
+- **REST API:** 2 requests/second (bucket-based)
+- **GraphQL API:** Cost-based (1000 points per second)
+
+The connector handles rate limits automatically:
+- Detects 429 errors and throttle messages
+- Implements exponential backoff
+- Adds random jitter to prevent thundering herd
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use GraphQL for efficiency">
+    GraphQL allows fetching exactly the data you need, reducing API calls and improving performance.
+  </Accordion>
+
+  <Accordion title="Enable webhooks">
+    Webhooks provide real-time updates and eliminate the need for constant polling. Always enable webhooks for production stores.
+  </Accordion>
+
+  <Accordion title="Handle pagination">
+    Shopify GraphQL uses cursor-based pagination. Implement pagination for large datasets:
+    ```typescript
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const data = await fetchProducts(cursor);
+      // Process data
+      cursor = data.pageInfo.endCursor;
+      hasNextPage = data.pageInfo.hasNextPage;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Namespace SKUs">
+    Prefix SKUs with product ID to avoid conflicts when products have duplicate variant SKUs:
+    ```typescript
+    const sku = `shopify-${productId}-${variant.sku}`;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="GraphQL errors">
+    **Error:** `GraphQL request failed`
+
+    **Solution:**
+    - Check API version compatibility (currently using 2026-01)
+    - Verify access token has required scopes
+    - Review GraphQL query syntax
+    - Check response for `userErrors` array
+  </Accordion>
+
+  <Accordion title="Rate limit errors">
+    **Error:** `429 Too Many Requests` or throttle message
+
+    **Solution:**
+    - Reduce request frequency
+    - Implement request queuing
+    - Use webhooks instead of polling
+    - The retry logic handles this automatically
+  </Accordion>
+
+  <Accordion title="Webhook signature validation fails">
+    **Error:** `Invalid webhook signature`
+
+    **Solution:**
+    - Verify webhook secret in Shopify admin
+    - Ensure raw body is used for HMAC calculation
+    - Check that `rawBody: true` is set in NestJS app
+  </Accordion>
+</AccordionGroup>
+
+## API reference
+
+### ShopifyService methods
+
+| Method | Description | Parameters |
+|--------|-------------|------------|
+| `initialize(credentials)` | Initialize service with credentials | `credentials: { shopDomain, accessToken }` |
+| `fetchProducts()` | Fetch all products with variants | None |
+| `fetchInventory(since?)` | Fetch inventory levels (delta) | `since?: string` (ISO timestamp) |
+| `fetchOrders(since?)` | Fetch orders (delta) | `since?: string` |
+| `fetchFulfillments(since?)` | Fetch fulfillment data (delta) | `since?: string` |
+| `fetchReturns(since?)` | Fetch return requests (delta) | `since?: string` |
+
+### GraphQL queries
+
+All queries are located in `backend/src/connectors/shopify/graphql/queries/`:
+
+- `products.graphql` — Product and variant data
+- `inventory.graphql` — Inventory levels
+- `orders.graphql` — Order and line item data
+- `fulfillments.graphql` — Shipping and tracking
+- `returns.graphql` — Return requests
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Webhooks guide" icon="webhook" href="/guides/webhooks">
+    Set up Shopify webhooks
+  </Card>
+  <Card title="Background jobs" icon="gears" href="/guides/jobs">
+    Understand product sync jobs
+  </Card>
+  <Card title="All connectors" icon="grid" href="/connectors/overview">
+    View other platform integrations
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Solve common issues
+  </Card>
+</CardGroup>

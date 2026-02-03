@@ -7,30 +7,106 @@ description: "Learn how to develop and customize the CrossConnect-Phos dashboard
 
 The CrossConnect-Phos frontend is built with Next.js 13+ using the App Router, React, TypeScript, and Tailwind CSS. It provides a multi-channel dashboard for monitoring and managing marketplace integrations.
 
-## Project structure
+## Project structure (actual)
 
 ```
 frontend/
 ├── app/
-│   ├── (auth)/              # Authentication routes
-│   │   ├── login/
-│   │   └── register/
-│   ├── (dashboard)/         # Dashboard routes
-│   │   ├── integrations/    # Connector management
-│   │   ├── orders/          # Order views
-│   │   ├── products/        # Product views
-│   │   ├── returns/         # Returns views
-│   │   └── settings/        # Settings pages
-│   ├── layout.tsx           # Root layout
-│   └── page.tsx             # Home page
-├── components/              # Reusable UI components
-│   ├── ui/                  # Base UI components
-│   └── dashboard/           # Dashboard-specific components
-├── lib/                     # Utilities and helpers
-│   ├── api.ts              # API client
-│   └── utils.ts            # Helper functions
-├── public/                  # Static assets
-└── styles/                  # Global styles
+│   ├── (auth)/                      # Authentication routes
+│   │   ├── signin/                  # Sign in page
+│   │   ├── signup/                  # Sign up page
+│   │   ├── forgot-password/         # Password reset
+│   │   ├── update-password/         # Update password
+│   │   ├── onboarding/              # Organization onboarding
+│   │   └── layout.tsx               # Auth layout
+│   ├── (dashboard)/                 # Protected dashboard routes
+│   │   ├── integrations/            # Store management
+│   │   ├── events/                  # Webhook events log
+│   │   ├── notifications/           # Alerts and notifications
+│   │   ├── settings/                # User/org settings
+│   │   ├── team/                    # Team management
+│   │   ├── layout.tsx               # Dashboard layout with sidebar
+│   │   └── page.tsx                 # Main dashboard
+│   ├── api/
+│   │   └── warehance/               # Warehance proxy route
+│   ├── auth/
+│   │   └── callback/                # OAuth callback handler
+│   ├── actions/                     # Server actions
+│   ├── layout.tsx                   # Root layout
+│   ├── providers.tsx                # Context providers
+│   └── globals.css                  # Global styles
+├── components/
+│   ├── data-display/                # Tables, badges, status
+│   │   ├── VirtualizedDataTable.tsx # High-performance tables
+│   │   ├── StatusBadge.tsx
+│   │   └── EmptyState.tsx
+│   ├── feedback/                    # Loading states
+│   ├── forms/                       # Form wrappers
+│   ├── layout/                      # Layout components
+│   │   ├── PageContainer.tsx
+│   │   ├── SearchCommand.tsx        # Cmd+K search
+│   │   ├── SidebarButtons.tsx
+│   │   └── orgs-selector.tsx        # Organization switcher
+│   ├── navigation/
+│   │   └── Breadcrumbs.tsx
+│   └── ui/                          # shadcn/ui components
+├── hooks/
+│   ├── use-mobile.ts
+│   ├── useNotifications.ts
+│   └── useStores.ts
+├── lib/
+│   ├── supabase/                    # Supabase clients
+│   │   ├── client.ts                # Browser client
+│   │   ├── server.ts                # Server client
+│   │   ├── admin.ts                 # Admin client
+│   │   └── proxy.ts                 # Proxy for API routes
+│   ├── helpers/
+│   │   └── getUser.ts
+│   ├── constants.ts
+│   ├── crypto.ts                    # Client-side encryption
+│   ├── formatters.ts                # Currency/number formatting
+│   ├── mockData.ts
+│   └── utils.ts                     # Utility functions
+├── modules/                         # Feature modules
+│   ├── auth/                        # Authentication
+│   │   ├── hooks/
+│   │   ├── schema/                  # Zod validation schemas
+│   │   └── ui/
+│   ├── dashboard/                   # Main dashboard
+│   │   ├── hooks/
+│   │   │   └── use-dashboard-data.ts
+│   │   └── ui/
+│   │       ├── components/
+│   │       │   ├── AlertsPanel.tsx
+│   │       │   ├── ChannelCard.tsx
+│   │       │   ├── MetricCard.tsx
+│   │       │   ├── SalesChart.tsx
+│   │       │   ├── orders-table.tsx
+│   │       │   ├── products-table.tsx
+│   │       │   ├── inventory-table.tsx
+│   │       │   ├── returns-table.tsx
+│   │       │   └── app-sidebar.tsx
+│   │       └── views/
+│   │           └── DashboardView.tsx
+│   ├── events/                      # Webhook events
+│   ├── integrations/                # Store integrations
+│   ├── notifications/               # Alerts
+│   ├── settings/                    # Settings
+│   └── team/                        # Team management
+├── public/
+│   └── images/                      # Platform logos
+│       ├── amazon.svg
+│       ├── faire.svg
+│       ├── shopify.svg
+│       ├── target.png
+│       ├── tiktok.svg
+│       ├── walmart.svg
+│       └── warehance.svg
+├── store/
+│   └── useStore.ts                  # Zustand global state
+├── types/
+│   └── supabase.types.ts            # Generated Supabase types
+└── package.json
 ```
 
 ## Development workflow
@@ -74,21 +150,45 @@ CrossConnect-Phos uses Next.js App Router with route groups for organization.
 
 Route groups organize routes without affecting the URL structure:
 
-- **(auth)** — Authentication pages (login, register)
-- **(dashboard)** — Protected dashboard pages
+- **(auth)** — Authentication pages with centered layout
+  - `/signin` — Sign in with email/password
+  - `/signup` — Create new account
+  - `/forgot-password` — Password reset
+  - `/update-password` — Update password after reset
+  - `/onboarding/organization` — Create organization after signup
 
-**Example structure:**
+- **(dashboard)** — Protected dashboard with sidebar navigation
+  - `/` — Main dashboard with metrics and charts
+  - `/integrations` — Store connection management
+  - `/events` — Webhook event logs
+  - `/notifications` — System alerts
+  - `/settings` — User and organization settings
+  - `/team` — Team member management
+
+**Actual structure:**
 
 ```
 app/
 ├── (auth)/
-│   ├── login/
-│   │   └── page.tsx         # /login
-│   └── layout.tsx           # Auth layout
-└── (dashboard)/
-    ├── integrations/
-    │   └── page.tsx         # /integrations
-    └── layout.tsx           # Dashboard layout
+│   ├── signin/page.tsx              # /signin
+│   ├── signup/page.tsx              # /signup
+│   ├── forgot-password/page.tsx     # /forgot-password
+│   ├── update-password/page.tsx     # /update-password
+│   ├── onboarding/
+│   │   └── organization/page.tsx    # /onboarding/organization
+│   └── layout.tsx                   # Centered auth layout
+├── (dashboard)/
+│   ├── page.tsx                     # / (main dashboard)
+│   ├── integrations/page.tsx        # /integrations
+│   ├── events/page.tsx              # /events
+│   ├── notifications/page.tsx       # /notifications
+│   ├── settings/page.tsx            # /settings
+│   ├── team/page.tsx                # /team
+│   └── layout.tsx                   # Dashboard layout with sidebar
+├── api/
+│   └── warehance/route.ts           # API proxy for Warehance
+└── auth/
+    └── callback/route.ts            # OAuth callback handler
 ```
 
 ### Creating a new page
@@ -133,19 +233,57 @@ app/
 
 ### UI components
 
-Base UI components are located in `components/ui/`:
+CrossConnect-Phos uses **shadcn/ui** components with custom extensions:
+
+**Base components** (`components/ui/`):
+- All shadcn/ui primitives (button, card, dialog, table, etc.)
+- Custom components: `spinner.tsx`, `empty.tsx`, `field.tsx`
+
+**Custom components:**
+
+```tsx components/data-display/VirtualizedDataTable.tsx
+// High-performance table for large datasets
+import { VirtualizedDataTable } from '@/components/data-display/VirtualizedDataTable';
+
+<VirtualizedDataTable
+  columns={columns}
+  data={products}
+  loading={isLoading}
+  onRowClick={(row) => setProductId(row.id)}
+/>
+```
+
+```tsx components/data-display/StatusBadge.tsx
+// Platform-aware status badges
+import { StatusBadge } from '@/components/data-display/StatusBadge';
+
+<StatusBadge 
+  status={store.auth_status}  // 'active' | 'inactive'
+  platform={store.platform}
+/>
+```
+
+```tsx components/layout/PageContainer.tsx
+// Consistent page layout
+import { PageContainer } from '@/components/layout/PageContainer';
+
+<PageContainer maxWidth="2xl" padding="lg">
+  {/* Your content */}
+</PageContainer>
+```
+
+**Platform icons:**
 
 ```tsx
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-
-export default function MyComponent() {
-  return (
-    <Card>
-      <Button>Click me</Button>
-    </Card>
-  );
-}
+const PLATFORM_ICONS: Record<string, string> = {
+  amazon: '/images/amazon.svg',
+  faire: '/images/faire.svg',
+  shopify: '/images/shopify.svg',
+  target: '/images/target.png',
+  walmart: '/images/walmart.svg',
+  tiktok: '/images/tiktok.svg',
+  warehance: '/images/warehance.svg',
+};
 ```
 
 ### Creating a new component
@@ -276,49 +414,83 @@ async function handleSubmit() {
 
 ## State management
 
-### Client-side state
+### Global state with Zustand
 
-Use React hooks for component state:
+CrossConnect-Phos uses Zustand for global state management:
+
+```typescript store/useStore.ts
+import { create } from 'zustand';
+import { Database } from '@/types/supabase.types';
+
+interface DashboardStore {
+  activeStore: Database['public']['Tables']['stores']['Row'] | null;
+  setActiveStore: (store: Database['public']['Tables']['stores']['Row'] | null) => void;
+}
+
+export const useDashboardStore = create<DashboardStore>((set) => ({
+  activeStore: null,
+  setActiveStore: (store) => set({ activeStore: store }),
+}));
+```
+
+**Usage in components:**
 
 ```tsx
-'use client';
+import { useDashboardStore } from '@/store/useStore';
 
-import { useState } from 'react';
-
-export default function Counter() {
-  const [count, setCount] = useState(0);
+export function MyComponent() {
+  const activeStore = useDashboardStore((state) => state.activeStore);
+  const setActiveStore = useDashboardStore((state) => state.setActiveStore);
 
   return (
     <div>
-      <p>Count: {count}</p>
-      <button onClick={() => setCount(count + 1)}>
-        Increment
-      </button>
+      {activeStore ? activeStore.name : 'No store selected'}
     </div>
   );
 }
 ```
 
-### Server components
+### URL state with nuqs
 
-Leverage Server Components for data fetching:
+Query parameters managed with `nuqs`:
 
 ```tsx
-async function getProducts() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/products`);
-  return res.json();
-}
+import { useQueryState, parseAsStringLiteral } from 'nuqs';
 
-export default async function ProductsPage() {
-  const products = await getProducts();
+const timeRangeValues = ['7d', '30d', '90d', '1y'] as const;
 
-  return (
-    <div>
-      {products.map(product => (
-        <div key={product.id}>{product.name}</div>
-      ))}
-    </div>
-  );
+const [timeRange, setTimeRange] = useQueryState<TimeRange>(
+  'range',
+  parseAsStringLiteral(timeRangeValues).withDefault('7d')
+);
+
+// URL: /?range=30d
+```
+
+### Server components with Supabase
+
+Fetch data server-side with Supabase:
+
+```tsx
+import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
+
+export default async function DashboardPage() {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect('/signin');
+  }
+
+  // Fetch data server-side
+  const { data: stores } = await supabase
+    .from('stores')
+    .select('*')
+    .eq('org_id', user.org_id);
+
+  return <DashboardView stores={stores} />;
 }
 ```
 

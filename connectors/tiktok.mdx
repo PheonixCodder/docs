@@ -1,0 +1,393 @@
+---
+title: "TikTok Shop connector"
+description: "Integrate with TikTok Shop API for social commerce"
+---
+
+## Overview
+
+The TikTok Shop connector uses the official TikTok Shop Open API with auto-generated TypeScript SDK for type-safe integration.
+
+## Features
+
+<CardGroup cols={2}>
+  <Card title="Generated SDK" icon="code">
+    Auto-generated TypeScript client from OpenAPI spec
+  </Card>
+  <Card title="Batch operations" icon="layer-group">
+    Supports batch inventory fetching (max 50 products)
+  </Card>
+  <Card title="Webhooks" icon="webhook">
+    Real-time order and product updates
+  </Card>
+  <Card title="Multi-version API" icon="versions">
+    Supports multiple API versions (202309-202512)
+  </Card>
+</CardGroup>
+
+## Authentication
+
+### OAuth 2.0
+
+TikTok Shop uses OAuth 2.0 for authorization:
+
+**Required credentials:**
+```typescript
+{
+  app_key: string;       // TikTok app key
+  app_secret: string;    // TikTok app secret
+  access_token: string;  // OAuth access token
+  shop_id: string;       // TikTok shop ID
+}
+```
+
+### Service initialization
+
+```typescript
+@Injectable()
+export class TikTokService {
+  private client: TikTokClient;
+
+  constructor(private crypto: CryptoService) {}
+
+  initialize(credentials: any, store: Store): void {
+    const appKey = this.crypto.decrypt(credentials.app_key);
+    const appSecret = this.crypto.decrypt(credentials.app_secret);
+    const accessToken = this.crypto.decrypt(credentials.access_token);
+
+    this.client = new TikTokClient({
+      appKey,
+      appSecret,
+      accessToken,
+    });
+  }
+}
+```
+
+## Data synchronization
+
+### Products
+
+Fetches products with pagination:
+
+```typescript
+async getAllProducts(storeId: string): Promise<TikTokProduct[]> {
+  const allProducts: TikTokProduct[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const response = await this.client.product.searchProducts({
+      page_size: 100,
+      page_token: pageToken,
+    });
+
+    if (response.data?.products) {
+      allProducts.push(...response.data.products);
+    }
+
+    pageToken = response.data?.next_page_token;
+  } while (pageToken);
+
+  return allProducts;
+}
+```
+
+**Product mapping:**
+
+```typescript
+export function mapTiktokProductToDB(
+  product: TikTokProduct,
+  storeId: string,
+): Database['public']['Tables']['products']['Insert'][] {
+  return product.skus?.map(sku => ({
+    external_product_id: product.id,
+    platform: 'tiktok',
+    store_id: storeId,
+    sku: sku.seller_sku || `tiktok-${product.id}-${sku.id}`,
+    title: product.title,
+    description: product.description,
+    price: sku.price?.amount ? Number(sku.price.amount) : 0,
+    currency: sku.price?.currency || 'USD',
+    status: product.status?.toLowerCase() || 'draft',
+  })) || [];
+}
+```
+
+### Inventory
+
+**Important:** TikTok inventory API accepts maximum 50 product IDs per request.
+
+```typescript
+async getProductInventories(
+  storeId: string,
+  productIds: string[]
+): Promise<TikTokInventory[]> {
+  const inventories: TikTokInventory[] = [];
+
+  // Batch in groups of 50
+  for (let i = 0; i < productIds.length; i += 50) {
+    const batch = productIds.slice(i, i + 50);
+
+    const response = await this.client.product.inventorySearch({
+      product_ids: batch,
+    });
+
+    if (response.data?.inventory) {
+      inventories.push(...response.data.inventory);
+    }
+  }
+
+  return inventories;
+}
+```
+
+**Inventory mapping:**
+
+```typescript
+export function mapTiktokInventoryToDB(
+  inventory: TikTokInventory,
+  sku: TikTokSku,
+  storeId: string,
+  productId: string,
+): Database['public']['Tables']['inventory']['Insert'] {
+  const available = sku.warehouse_inventory?.reduce(
+    (sum, wh) => sum + (wh.available_quantity || 0),
+    0
+  ) || 0;
+
+  return {
+    store_id: storeId,
+    product_id: productId,
+    sku: sku.seller_sku || 'NO-SKU',
+    platform_quantity: available,
+    inventory_status: available > 0 ? 'in_stock' : 'out_of_stock',
+    last_platform_event: 'tiktok_inventory_sync',
+    last_synced_at: new Date().toISOString(),
+  };
+}
+```
+
+### Orders
+
+Fetches orders with line items:
+
+```typescript
+async getAllOrders(storeId: string, since?: string): Promise<TikTokOrder[]> {
+  const allOrders: TikTokOrder[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const response = await this.client.order.getOrderList({
+      page_size: 50,
+      cursor,
+      update_time_from: since ? new Date(since).getTime() / 1000 : undefined,
+    });
+
+    if (response.data?.orders) {
+      allOrders.push(...response.data.orders);
+    }
+
+    cursor = response.data?.next_cursor;
+  } while (cursor);
+
+  return allOrders;
+}
+```
+
+## Sync workflow
+
+The ProductsProcessor handles TikTok sync in these steps:
+
+```typescript
+private async processTiktokProducts(service: TikTokService, store) {
+  // 1. Fetch all products
+  const products = await service.getAllProducts(store.id);
+
+  // 2. Map and upsert products
+  const productRows = products.flatMap(p => 
+    mapTiktokProductToDB(p, store.id)
+  );
+  await this.productsRepo.insertProducts(productRows);
+
+  // 3. Resolve SKU → product_id mapping
+  const skus = [...new Set(productRows.map(p => p.sku))];
+  const productIdBySku = await this.productsRepo
+    .getProductIdsBySkusInBatches(store.id, skus, 'tiktok');
+
+  // 4. Fetch existing inventory for delta comparison
+  const existingInventory = await this.inventoryRepo
+    .getBySkus(skus, store.id);
+
+  // 5. Fetch inventory in batches of 50
+  const productIds = [...new Set(products.map(p => p.id))];
+  const inventoryUpserts = [];
+
+  for (let i = 0; i < productIds.length; i += 50) {
+    const batch = productIds.slice(i, i + 50);
+    const inventories = await service.getProductInventories(store.id, batch);
+
+    for (const inv of inventories) {
+      for (const sku of inv.skus ?? []) {
+        const productId = productIdBySku.get(sku.seller_sku);
+        if (!productId) continue;
+
+        const next = mapTiktokInventoryToDB(inv, sku, store.id, productId);
+        const existing = existingInventory[sku.seller_sku];
+
+        if (!existing || shouldUpdateTiktokInventory(existing, next)) {
+          inventoryUpserts.push(next);
+        }
+      }
+    }
+  }
+
+  // 6. Upsert inventory changes
+  if (inventoryUpserts.length) {
+    await this.inventoryRepo.updateInventoryBatch(inventoryUpserts);
+  }
+}
+```
+
+## Generated SDK
+
+The TikTok SDK is auto-generated from OpenAPI specifications:
+
+**Location:** `backend/src/libs/tiktok/`
+
+**Available APIs:**
+- Product API (v202309 - v202509)
+- Order API (v202309 - v202511)
+- Fulfillment API (v202309 - v202601)
+- Return/Refund API (v202309 - v202512)
+- Analytics API (v202403 - v202512)
+- Affiliate API (v202309 - v202512)
+- Finance API (v202309 - v202507)
+- And more...
+
+**Usage:**
+
+```typescript
+import { ProductV202502Api } from '@/libs/tiktok';
+
+const productApi = new ProductV202502Api(config);
+const response = await productApi.searchProducts({
+  page_size: 100,
+});
+```
+
+## Webhooks
+
+TikTok Shop supports webhooks for real-time updates:
+
+**Supported events:**
+- `ORDER_STATUS_CHANGE` — Order status updated
+- `PRODUCT_UPDATE` — Product information changed
+- `INVENTORY_UPDATE` — Stock levels changed
+
+**Webhook endpoint:**
+```
+POST /api/webhooks/tiktok
+```
+
+## Rate limiting
+
+TikTok Shop API rate limits vary by endpoint:
+
+- **Product API:** 10 requests/second
+- **Order API:** 10 requests/second
+- **Inventory API:** 5 requests/second
+
+The connector handles rate limits via:
+- Automatic retry on 429 errors
+- Exponential backoff
+- Batch processing for inventory
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Batch inventory requests">
+    Always fetch inventory in batches of 50 product IDs to minimize API calls:
+    ```typescript
+    for (let i = 0; i < productIds.length; i += 50) {
+      const batch = productIds.slice(i, i + 50);
+      await service.getProductInventories(storeId, batch);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use latest API version">
+    TikTok frequently updates API versions. Use the latest stable version for new features and bug fixes.
+  </Accordion>
+
+  <Accordion title="Handle pagination">
+    TikTok uses cursor-based pagination. Always check for `next_cursor` or `next_page_token`:
+    ```typescript
+    do {
+      const response = await api.getOrders({ cursor });
+      cursor = response.data?.next_cursor;
+    } while (cursor);
+    ```
+  </Accordion>
+
+  <Accordion title="Enable webhooks">
+    Webhooks reduce API calls and provide real-time updates. Configure webhooks in TikTok Seller Center.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="SDK import errors">
+    **Error:** `Cannot find module '@/libs/tiktok'`
+
+    **Solution:**
+    - Ensure SDK is generated: `npm run generate:tiktok`
+    - Check TypeScript paths in `tsconfig.json`
+    - Restart TypeScript server
+  </Accordion>
+
+  <Accordion title="Inventory batch size error">
+    **Error:** `Too many product IDs`
+
+    **Solution:**
+    - Ensure batches are ≤ 50 product IDs
+    - Check batch slicing logic
+    - Verify product ID array is not empty
+  </Accordion>
+
+  <Accordion title="Webhook signature validation">
+    **Error:** `Invalid webhook signature`
+
+    **Solution:**
+    - Verify webhook secret in TikTok Seller Center
+    - Check signature calculation algorithm
+    - Ensure timestamp is within acceptable range
+  </Accordion>
+</AccordionGroup>
+
+## API reference
+
+### TikTokService methods
+
+| Method | Description | Parameters |
+|--------|-------------|------------|
+| `initialize(credentials, store)` | Initialize service | `credentials, store` |
+| `getAllProducts(storeId)` | Fetch all products (paginated) | `storeId: string` |
+| `getProductInventories(storeId, productIds)` | Batch fetch inventory (max 50) | `storeId: string, productIds: string[]` |
+| `getAllOrders(storeId, since?)` | Fetch orders (delta) | `storeId: string, since?: string` |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Webhooks guide" icon="webhook" href="/guides/webhooks">
+    Set up TikTok webhooks
+  </Card>
+  <Card title="Background jobs" icon="gears" href="/guides/jobs">
+    Understand TikTok sync jobs
+  </Card>
+  <Card title="All connectors" icon="grid" href="/connectors/overview">
+    View other integrations
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Solve common issues
+  </Card>
+</CardGroup>

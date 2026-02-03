@@ -47,6 +47,23 @@ Create a `backend/.env` file with the following variables:
   **Default:** `6379`
 </ParamField>
 
+### Security variables
+
+<ParamField path="CREDENTIALS_ENCRYPTION_KEY" type="string" required>
+  A 64-character hex string (32 bytes) used to encrypt/decrypt platform credentials.
+  
+  **Generate a key:**
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ```
+  
+  **Example:** `a1b2c3d4e5f6...` (64 characters)
+  
+  <Warning>
+    This key is critical for security. If lost, all stored credentials become unrecoverable. Back up this key securely.
+  </Warning>
+</ParamField>
+
 ### Optional variables
 
 <ParamField path="REDIS_PASSWORD" type="string">
@@ -93,12 +110,37 @@ Create a `backend/.env` file with the following variables:
   **Location:** New Relic Dashboard → Account Settings → API Keys
 </ParamField>
 
+### Platform-specific variables (optional)
+
+<ParamField path="FAIRE_APP_ID" type="string">
+  Faire application ID for OAuth authentication.
+  
+  **Location:** Faire Developer Portal → Your App → Credentials
+</ParamField>
+
+<ParamField path="FAIRE_APP_SECRET" type="string">
+  Faire application secret for OAuth authentication.
+  
+  **Location:** Faire Developer Portal → Your App → Credentials
+</ParamField>
+
+<ParamField path="APP_URL" type="string">
+  The public URL of your backend application (used for webhook callbacks).
+  
+  **Development:** `http://localhost:3001`
+  
+  **Production:** `https://api.yourdomain.com`
+</ParamField>
+
 ### Example backend .env file
 
 ```bash backend/.env
 # Supabase Configuration
 SUPABASE_URL=https://abcdefghijklmnop.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Security
+CREDENTIALS_ENCRYPTION_KEY=a1b2c3d4e5f6789...  # 64-char hex string
 
 # Redis Configuration
 REDIS_HOST=127.0.0.1
@@ -107,8 +149,13 @@ REDIS_PASSWORD=
 
 # Application Configuration
 FRONTEND_URL=http://localhost:3000
+APP_URL=http://localhost:3001
 PORT=3001
 NODE_ENV=development
+
+# Platform Credentials (Optional)
+FAIRE_APP_ID=your-faire-app-id
+FAIRE_APP_SECRET=your-faire-app-secret
 
 # New Relic (Optional)
 # NEW_RELIC_APP_NAME=CrossConnect-Phos-Dev
@@ -246,16 +293,44 @@ SUPABASE_SERVICE_KEY=your-service-key
 
 ## Validation
 
-The backend uses NestJS ConfigModule with validation. If required environment variables are missing, the application will fail to start with a clear error message.
+The backend uses Joi schema validation in `config/env.validation.ts`:
 
-To test your configuration:
+```typescript
+import * as Joi from 'joi';
+
+export const envValidationSchema = Joi.object({
+  SUPABASE_URL: Joi.string().uri().required(),
+  SUPABASE_SERVICE_KEY: Joi.string().required(),
+});
+```
+
+**Validation rules:**
+- `SUPABASE_URL` — Must be a valid URI
+- `SUPABASE_SERVICE_KEY` — Required string
+
+If required environment variables are missing or invalid, the application will fail to start with a clear error message:
 
 ```bash
 cd backend
 npm run start:dev
+
+# Error example:
+# Error: Config validation error: "SUPABASE_URL" is required
 ```
 
-Look for validation errors in the console output.
+**Adding validation for new variables:**
+
+```typescript
+export const envValidationSchema = Joi.object({
+  SUPABASE_URL: Joi.string().uri().required(),
+  SUPABASE_SERVICE_KEY: Joi.string().required(),
+  
+  // Add new variables
+  REDIS_HOST: Joi.string().default('localhost'),
+  REDIS_PORT: Joi.number().default(6379),
+  NEW_API_KEY: Joi.string().required(),
+});
+```
 
 ## Security best practices
 

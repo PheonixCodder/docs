@@ -81,40 +81,82 @@ export class ShopifyController {
 
 ### Service
 
-Contains business logic and API client:
+Contains business logic and API client with initialization pattern:
 
 ```typescript
 @Injectable()
 export class ShopifyService {
-  async fetchProducts(storeId: string) {
-    const credentials = await this.getCredentials(storeId);
-    const response = await this.httpService.get(
-      `https://${credentials.shop}.myshopify.com/admin/api/2024-01/products.json`,
-      { headers: { 'X-Shopify-Access-Token': credentials.accessToken } }
+  private client: GraphQLClient;
+  private shop: string;
+  private accessToken: string;
+
+  constructor(private crypto: CryptoService) {}
+
+  // Must be called before using service
+  initialize(credentials: any): void {
+    this.shop = this.crypto.decrypt(credentials.shopDomain);
+    this.accessToken = this.crypto.decrypt(credentials.accessToken);
+
+    this.client = new GraphQLClient(
+      `https://${this.shop}/admin/api/2026-01/graphql.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': this.accessToken,
+          'Content-Type': 'application/json',
+        },
+      }
     );
-    return response.data.products;
+  }
+
+  async fetchProducts(): Promise<ShopifyProductNode[]> {
+    const data = await this.execute<FetchProductsQuery>(FETCH_PRODUCTS);
+    return data?.products?.nodes || [];
   }
 }
 ```
+
+**Key pattern:** Services are initialized with decrypted credentials via `PlatformServiceFactory`.
 
 ### Mapper
 
-Transforms platform data to internal format:
+Transforms platform data to internal Supabase schema:
 
 ```typescript
-@Injectable()
-export class ShopifyMapper {
-  toProduct(shopifyProduct: any): Product {
+// Actual Shopify mapper
+export function mapShopifyProductToDB(
+  product: ShopifyProductNode,
+  storeId: string,
+): Database['public']['Tables']['products']['Insert'][] {
+  return product.variants.nodes.map((variant) => {
+    const productId = product.id.split('/').pop();
+    const variantId = variant.id.split('/').pop();
+
+    // Namespace SKU to avoid conflicts
+    const sku = variant.sku
+      ? `shopify-${productId}-${variant.sku}`
+      : `shopify-${productId}-variant-${variantId}`;
+
     return {
-      id: shopifyProduct.id.toString(),
-      name: shopifyProduct.title,
-      price: parseFloat(shopifyProduct.variants[0].price),
-      sku: shopifyProduct.variants[0].sku,
-      // ... more mappings
+      external_product_id: product.id,
+      platform: 'shopify',
+      store_id: storeId,
+      sku,
+      title: product.title,
+      description: product.descriptionPlainSummary || null,
+      price: variant.price ? Number(variant.price) : 0,
+      currency: 'USD',
+      status: product.status?.toLowerCase() ?? 'draft',
     };
-  }
+  });
 }
 ```
+
+**Mapper responsibilities:**
+- Transform platform-specific data to Supabase schema
+- Handle missing/null values
+- Namespace SKUs to prevent conflicts
+- Extract nested data structures
+- Type-safe transformations using generated types
 
 ## Common features
 
@@ -123,20 +165,49 @@ All connectors support:
 <AccordionGroup>
   <Accordion title="Authentication">
     Each connector handles platform-specific authentication:
-    - OAuth 2.0 (Shopify, Amazon)
-    - API keys (Walmart, TikTok)
-    - Token-based auth (Faire, Target)
+    - **OAuth 2.0** — Shopify, Faire, TikTok, Amazon
+    - **API keys** — Walmart, Target
+    - **WMS credentials** — Warehance
 
-    Credentials are stored securely in the `store_credentials` table.
+    **Credential encryption:**
+    All credentials are encrypted using `CryptoService` before storage:
+    ```typescript
+    // Encryption
+    const encrypted = this.crypto.encrypt(credentials.accessToken);
+    await storeCredentialsRepo.save({ credentials: encrypted });
+
+    // Decryption
+    const decrypted = this.crypto.decrypt(stored.credentials.accessToken);
+    ```
+
+    Credentials are stored in the `store_credentials` table with JSONB type.
   </Accordion>
 
   <Accordion title="Data synchronization">
     Connectors sync three main data types:
-    - **Products** — SKUs, prices, inventory, descriptions
-    - **Orders** — Order details, customer info, fulfillment status
-    - **Returns** — Return requests, reasons, refund status
+    - **Products & Inventory** — SKUs, prices, stock levels, descriptions
+      - Atomic sync: Products and inventory updated together
+      - Delta detection: Only updates changed inventory
+      - Batch operations: Efficient bulk inserts
+    
+    - **Orders & Order Items** — Order details, line items, fulfillment
+      - Includes customer info, payment status
+      - Links to products via SKU
+      - Tracks fulfillment status
+    
+    - **Returns** — Return requests, refunds (selective platforms)
+      - Supported: Amazon, Walmart, Shopify, Target
+      - Not supported: TikTok, Faire, Warehance
 
-    Sync can be triggered manually or scheduled automatically.
+    **Sync modes:**
+    - **Full sync** — Fetches all data (first sync or no timestamp)
+    - **Delta sync** — Fetches only changed data using `since` parameter
+    - **Webhook sync** — Real-time updates (Shopify, TikTok, Walmart)
+
+    **Sync triggers:**
+    - Manual: Via API endpoint or dashboard
+    - Scheduled: Via `TasksService.pollAllActiveStores()`
+    - Webhook: Automatic on platform events
   </Accordion>
 
   <Accordion title="Webhooks (where supported)">
@@ -157,12 +228,22 @@ All connectors support:
   </Accordion>
 
   <Accordion title="Rate limiting">
-    Respects platform rate limits:
-    - Shopify: 2 requests/second
-    - Amazon: Varies by endpoint
-    - Walmart: 5000 requests/day
+    Respects platform rate limits with adaptive strategies:
 
-    Implements request throttling and queuing.
+    **Platform limits:**
+    - **Shopify:** 2 requests/second (REST), cost-based (GraphQL)
+    - **TikTok:** 10 requests/second (varies by endpoint)
+    - **Faire:** 100 requests/minute
+    - **Walmart:** 5000 requests/day
+    - **Amazon:** Varies by endpoint (SP-API throttling)
+
+    **Mitigation strategies:**
+    - Exponential backoff with jitter (prevents thundering herd)
+    - Automatic retry on 429 errors (max 5 attempts)
+    - Request queuing via BullMQ
+    - Adaptive batch sizing (Walmart: 3 items/batch with 500ms delay)
+    - Delta sync to reduce API calls
+    - Webhook usage where available
   </Accordion>
 </AccordionGroup>
 

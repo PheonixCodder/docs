@@ -25,16 +25,36 @@ The backend is built with NestJS and follows a modular architecture pattern.
 <AccordionGroup>
   <Accordion title="AppModule" icon="cube">
     The root module that wires together all other modules:
-    - ConfigModule — Environment configuration and validation
-    - SupabaseModule — Database and storage connections
-    - BullModule — Redis-based job queue connection
-    - ConnectorsModule — Marketplace and warehouse integrations
-    - JobsModule — Background job processors
-    - WebhooksModule — Incoming webhook handlers
-    - LoggerModule — Structured logging with pino
-    - TasksModule — Scheduled tasks and polling
+    - **ConfigModule** — Environment configuration and validation
+    - **SupabaseModule** — Database and storage connections via `nestjs-supabase-js`
+    - **BullModule** — Redis-based job queue connection with BullMQ
+      - Connection timeout: 10 seconds
+      - Max retries per request: null (required for BullMQ)
+      - Default job options: `removeOnComplete: true`, `removeOnFail: false`
+    - **ConnectorsModule** — Marketplace and warehouse integrations
+    - **JobsModule** — Background job processors with retry logic
+    - **WebhooksModule** — Incoming webhook handlers
+    - **LoggerModule** — Structured logging with `nestjs-pino`
+      - Development: Pretty-printed colored logs
+      - Production: JSON structured logs
+    - **CommonModule** — Shared utilities (CryptoService, guards)
+    - **ScheduleModule** — Cron-based task scheduling
 
     **Location:** `backend/src/app.module.ts`
+
+    **Key configuration:**
+    ```typescript
+    BullModule.forRoot({
+      connection: {
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD,
+        tls: {},
+        maxRetriesPerRequest: null,  // Required for BullMQ
+        connectTimeout: 10000,
+      },
+    })
+    ```
   </Accordion>
 
   <Accordion title="ConnectorsModule" icon="plug">
@@ -57,13 +77,35 @@ The backend is built with NestJS and follows a modular architecture pattern.
 
   <Accordion title="JobsModule" icon="gears">
     Handles background processing with BullMQ. Registers three main queues:
-    - **products** — Product data synchronization
+    - **products** — Product and inventory synchronization (concurrency: 5)
     - **orders** — Order data synchronization
-    - **returns** — Return data synchronization
+    - **returns** — Return data synchronization (Amazon, Walmart, Shopify, Target only)
 
-    Each queue has a dedicated processor that handles job execution, retries, and error handling.
+    **Queue configuration:**
+    ```typescript
+    {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+    ```
+
+    **Processors:**
+    - `ProductsProcessor` — Handles platform-specific product sync with retry logic
+    - `OrdersProcessor` — Processes order data from all platforms
+    - `ReturnsProcessor` — Manages return/refund data
 
     **Location:** `backend/src/jobs/`
+
+    **Dependencies:**
+    - All connector modules (Faire, Walmart, Target, Amazon, Shopify, Warehance, TikTok)
+    - All repositories (Products, Orders, Stores, OrderItems, Inventory, Fulfillments, Returns, Alerts)
+    - PlatformServiceFactory — Creates platform-specific service instances
+    - StoreCredentialsService — Manages encrypted credentials
   </Accordion>
 
   <Accordion title="WebhooksModule" icon="webhook">
@@ -78,23 +120,85 @@ The backend is built with NestJS and follows a modular architecture pattern.
   </Accordion>
 
   <Accordion title="SupabaseModule" icon="database">
-    Provides repositories for database access:
-    - StoresRepository — Store configuration and status
-    - StoreCredentialsRepository — Platform credentials (encrypted)
-    - OrdersRepository — Order data
-    - ProductsRepository — Product data
-    - AlertsRepository — System alerts and notifications
+    Provides repositories for database access using `nestjs-supabase-js`:
 
-    **Location:** `backend/src/supabase/`
+    **Repositories:**
+    - **StoresRepository** — Store configuration, health status, sync timestamps
+      - `getAllActiveStores()` — Fetch stores with `auth_status = 'active'`
+      - `updateStoreHealth()` — Update health status and create alerts
+      - `updateWebhookStatus()` — Manage webhook connection status
+      - `storesAsQueued()` — Bulk update last_health_check
+    
+    - **StoreCredentialsService** — Encrypted platform credentials
+      - `getActiveStoresWithCredentials()` — Join stores + credentials
+      - `getCredentialsByStoreId()` — Fetch and decrypt credentials
+    
+    - **ProductsRepository** — Product data with batch operations
+      - `insertProducts()` — Upsert products by SKU
+      - `getProductIdsBySkusInBatches()` — Resolve internal IDs
+      - `syncProductsAndInventory()` — Atomic transaction
+    
+    - **OrdersRepository** — Order data
+    - **OrderItemsRepository** — Line items for orders
+    - **InventoryRepository** — Stock levels and warehouse data
+      - `getBySkus()` — Fetch existing inventory for delta comparison
+      - `updateInventoryBatch()` — Bulk upsert inventory
+    
+    - **FulfillmentsRepository** — Shipping and tracking data
+    - **ReturnsRepository** — Return/refund data
+    - **AlertsRepository** — System alerts and notifications
+      - `createAlert()` — Log sync failures, health issues
+    - **MetricsRepository** — Performance metrics
+    - **RawEventsRepository** — Webhook event logs
+
+    **Location:** `backend/src/supabase/repositories/`
+
+    **Security:**
+    - All credentials encrypted using `CryptoService`
+    - Service role key used for backend operations
+    - Row-level security policies enforced
   </Accordion>
 
-  <Accordion title="TasksModule" icon="clock">
-    Manages scheduled tasks using NestJS Schedule:
-    - **Polling** — Checks active stores and enqueues sync jobs
-    - **Health checks** — Runs every 5 minutes
-    - **Cleanup** — Removes completed jobs older than 7 days (runs daily)
+  <Accordion title="TasksService" icon="clock">
+    Manages scheduled tasks using NestJS `@Interval` decorators:
+
+    **Scheduled tasks:**
+    
+    1. **pollAllActiveStores()** — Main sync orchestrator
+       - Fetches all active stores with credentials
+       - Enqueues products, orders, and returns jobs for each store
+       - Includes 500ms delay between stores to prevent rate limiting
+       - Updates store health status on success/failure
+       - Creates alerts for failures
+    
+    2. **healthCheck()** — System health monitoring
+       - Interval: Every 5 minutes (300,000ms)
+       - Checks active store count
+       - Validates Redis/Supabase connectivity
+       - Creates critical alerts on failure
+    
+    3. **cleanupOldJobs()** — Job queue maintenance
+       - Interval: Daily (86,400,000ms)
+       - Removes completed jobs older than 7 days
+       - Cleans all three queues (products, orders, returns)
+       - Keeps last 1000 jobs per queue
 
     **Location:** `backend/src/tasks/tasks.service.ts`
+
+    **Job creation logic:**
+    ```typescript
+    // Products job
+    jobId: `products-${storeId}-${Date.now()}`
+    attempts: 5
+    backoff: exponential, 5000ms delay
+    
+    // Orders job
+    jobId: `orders-${storeId}-${Date.now()}`
+    
+    // Returns job (selective platforms)
+    platforms: ['amazon', 'walmart', 'shopify', 'target']
+    jobId: `returns-${storeId}-${Date.now()}`
+    ```
   </Accordion>
 </AccordionGroup>
 
