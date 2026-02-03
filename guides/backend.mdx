@@ -1,0 +1,564 @@
+---
+title: "Backend development"
+description: "Learn how to develop and extend the CrossConnect-Phos backend"
+---
+
+## Overview
+
+The CrossConnect-Phos backend is built with NestJS, a progressive Node.js framework. This guide covers the backend structure, development workflow, and how to extend functionality.
+
+## Project structure
+
+```
+backend/
+├── src/
+│   ├── api/
+│   │   └── webhooks/         # Webhook handlers
+│   ├── connectors/           # Platform integrations
+│   ├── jobs/                 # Background job processors
+│   ├── supabase/            # Database repositories
+│   ├── tasks/               # Scheduled tasks
+│   ├── app.module.ts        # Root module
+│   └── main.ts              # Application entry point
+├── test/                    # E2E tests
+├── .env                     # Environment variables
+└── package.json
+```
+
+## Development workflow
+
+### Running the backend
+
+Start the backend in development mode with hot-reload:
+
+```bash
+cd backend
+npm run start:dev
+```
+
+The server will start on the port specified in your `.env` file (default: 3001).
+
+### Available scripts
+
+<CodeGroup>
+```bash Development
+npm run start:dev
+```
+
+```bash Production build
+npm run build
+```
+
+```bash Production start
+npm run start:prod
+```
+
+```bash Run tests
+npm run test
+```
+
+```bash E2E tests
+npm run test:e2e
+```
+
+```bash Lint code
+npm run lint
+```
+
+```bash Format code
+npm run format
+```
+</CodeGroup>
+
+## Core concepts
+
+### Modules
+
+NestJS uses modules to organize code. Each feature has its own module that encapsulates related controllers, services, and providers.
+
+**Example module structure:**
+
+```typescript
+@Module({
+  imports: [HttpModule],
+  controllers: [ShopifyController],
+  providers: [ShopifyService, ShopifyMapper],
+  exports: [ShopifyService],
+})
+export class ShopifyModule {}
+```
+
+### Controllers
+
+Controllers handle incoming HTTP requests and return responses.
+
+**Location:** `backend/src/connectors/[platform]/[platform].controller.ts`
+
+**Example:**
+
+```typescript
+@Controller('shopify')
+export class ShopifyController {
+  constructor(private readonly shopifyService: ShopifyService) {}
+
+  @Get('products')
+  async getProducts(@Query('storeId') storeId: string) {
+    return this.shopifyService.fetchProducts(storeId);
+  }
+}
+```
+
+### Services
+
+Services contain business logic and interact with external APIs or databases.
+
+**Location:** `backend/src/connectors/[platform]/[platform].service.ts`
+
+**Example:**
+
+```typescript
+@Injectable()
+export class ShopifyService {
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly productsRepository: ProductsRepository,
+  ) {}
+
+  async fetchProducts(storeId: string) {
+    // Fetch from Shopify API
+    const response = await this.httpService.get(/* ... */);
+    
+    // Save to database
+    await this.productsRepository.bulkUpsert(response.data);
+    
+    return response.data;
+  }
+}
+```
+
+### Repositories
+
+Repositories handle database operations with Supabase.
+
+**Location:** `backend/src/supabase/repositories/`
+
+**Example:**
+
+```typescript
+@Injectable()
+export class ProductsRepository {
+  constructor(private readonly supabase: SupabaseClient) {}
+
+  async findByStoreId(storeId: string) {
+    const { data, error } = await this.supabase
+      .from('products')
+      .select('*')
+      .eq('store_id', storeId);
+
+    if (error) throw error;
+    return data;
+  }
+
+  async bulkUpsert(products: Product[]) {
+    const { error } = await this.supabase
+      .from('products')
+      .upsert(products);
+
+    if (error) throw error;
+  }
+}
+```
+
+## Adding a new connector
+
+To add support for a new marketplace or warehouse platform:
+
+<Steps>
+  <Step title="Create the module directory">
+    ```bash
+    mkdir -p src/connectors/newplatform
+    ```
+  </Step>
+
+  <Step title="Create the module files">
+    Create the following files:
+    - `newplatform.module.ts` — Module definition
+    - `newplatform.controller.ts` — API endpoints
+    - `newplatform.service.ts` — Business logic
+    - `newplatform.mapper.ts` — Data transformation
+    - `newplatform.types.ts` — TypeScript types
+  </Step>
+
+  <Step title="Implement the service">
+    ```typescript newplatform.service.ts
+    @Injectable()
+    export class NewPlatformService {
+      async fetchProducts(credentials: StoreCredentials) {
+        // Implement API calls to the platform
+      }
+
+      async fetchOrders(credentials: StoreCredentials) {
+        // Implement order fetching
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Register the module">
+    Add your module to `ConnectorsModule`:
+
+    ```typescript connectors.module.ts
+    @Module({
+      imports: [
+        // ... existing connectors
+        NewPlatformModule,
+      ],
+    })
+    export class ConnectorsModule {}
+    ```
+  </Step>
+
+  <Step title="Add job processor">
+    Create a processor in `src/jobs/` to handle background sync:
+
+    ```typescript
+    @Processor('newplatform-products')
+    export class NewPlatformProductsProcessor {
+      @Process()
+      async handleProductSync(job: Job) {
+        // Process the job
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Working with jobs
+
+### Creating a job
+
+Enqueue a job from any service:
+
+```typescript
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
+
+@Injectable()
+export class MyService {
+  constructor(
+    @InjectQueue('products') private productsQueue: Queue,
+  ) {}
+
+  async syncProducts(storeId: string) {
+    await this.productsQueue.add('sync', {
+      storeId,
+      timestamp: new Date(),
+    });
+  }
+}
+```
+
+### Processing a job
+
+Create a processor to handle jobs:
+
+```typescript
+import { Processor, Process } from '@nestjs/bull';
+import { Job } from 'bull';
+
+@Processor('products')
+export class ProductsProcessor {
+  @Process('sync')
+  async handleSync(job: Job) {
+    const { storeId } = job.data;
+    
+    // Perform sync logic
+    await this.syncProductsForStore(storeId);
+    
+    return { success: true };
+  }
+}
+```
+
+<Card title="Learn more about jobs" icon="gears" href="/guides/jobs">
+  View the complete guide on background job processing.
+</Card>
+
+## Database operations
+
+### Using repositories
+
+Always use repositories for database operations:
+
+```typescript
+@Injectable()
+export class MyService {
+  constructor(
+    private readonly storesRepository: StoresRepository,
+  ) {}
+
+  async getActiveStores() {
+    return this.storesRepository.findActive();
+  }
+}
+```
+
+### Creating a new repository
+
+<Steps>
+  <Step title="Create the repository file">
+    ```bash
+    touch src/supabase/repositories/my-entity.repository.ts
+    ```
+  </Step>
+
+  <Step title="Implement the repository">
+    ```typescript
+    @Injectable()
+    export class MyEntityRepository {
+      constructor(
+        @Inject('SUPABASE_CLIENT')
+        private readonly supabase: SupabaseClient,
+      ) {}
+
+      async findAll() {
+        const { data, error } = await this.supabase
+          .from('my_entity')
+          .select('*');
+
+        if (error) throw error;
+        return data;
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Register in SupabaseModule">
+    Add to the providers array in `supabase.module.ts`.
+  </Step>
+</Steps>
+
+## Logging
+
+CrossConnect-Phos uses `nestjs-pino` for structured logging.
+
+### Using the logger
+
+```typescript
+import { Logger } from '@nestjs/common';
+
+@Injectable()
+export class MyService {
+  private readonly logger = new Logger(MyService.name);
+
+  async doSomething() {
+    this.logger.log('Starting operation');
+    
+    try {
+      // ... operation
+      this.logger.log('Operation completed successfully');
+    } catch (error) {
+      this.logger.error('Operation failed', error.stack);
+    }
+  }
+}
+```
+
+### Log levels
+
+- `logger.log()` — General information
+- `logger.debug()` — Detailed debugging information
+- `logger.warn()` — Warning messages
+- `logger.error()` — Error messages with stack traces
+
+## Testing
+
+### Unit tests
+
+Create unit tests alongside your code:
+
+```typescript my-service.spec.ts
+describe('MyService', () => {
+  let service: MyService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [MyService],
+    }).compile();
+
+    service = module.get<MyService>(MyService);
+  });
+
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
+
+  it('should fetch products', async () => {
+    const result = await service.fetchProducts('store-123');
+    expect(result).toHaveLength(10);
+  });
+});
+```
+
+Run tests:
+
+```bash
+npm run test
+```
+
+### E2E tests
+
+E2E tests are located in the `test/` directory:
+
+```typescript app.e2e-spec.ts
+describe('AppController (e2e)', () => {
+  let app: INestApplication;
+
+  beforeEach(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    await app.init();
+  });
+
+  it('/api/health (GET)', () => {
+    return request(app.getHttpServer())
+      .get('/api/health')
+      .expect(200);
+  });
+});
+```
+
+Run E2E tests:
+
+```bash
+npm run test:e2e
+```
+
+<Card title="View testing guide" icon="flask" href="/guides/testing">
+  Learn more about testing strategies and best practices.
+</Card>
+
+## API documentation
+
+The backend includes OpenAPI/Swagger documentation. Access it at:
+
+```
+http://localhost:3001/api/docs
+```
+
+To update the API documentation, use decorators:
+
+```typescript
+@ApiTags('products')
+@Controller('products')
+export class ProductsController {
+  @Get()
+  @ApiOperation({ summary: 'Get all products' })
+  @ApiResponse({ status: 200, description: 'Products retrieved successfully' })
+  async findAll() {
+    // ...
+  }
+}
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use dependency injection">
+    Always inject dependencies through constructors rather than creating instances manually.
+  </Accordion>
+
+  <Accordion title="Handle errors properly">
+    Use try-catch blocks and throw appropriate HTTP exceptions:
+    ```typescript
+    throw new NotFoundException('Store not found');
+    ```
+  </Accordion>
+
+  <Accordion title="Validate input">
+    Use DTOs with class-validator decorators:
+    ```typescript
+    export class CreateProductDto {
+      @IsString()
+      @IsNotEmpty()
+      name: string;
+
+      @IsNumber()
+      @Min(0)
+      price: number;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Use environment variables">
+    Never hardcode configuration values. Use the ConfigService:
+    ```typescript
+    constructor(private configService: ConfigService) {}
+
+    getApiKey() {
+      return this.configService.get<string>('API_KEY');
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Keep services focused">
+    Each service should have a single responsibility. Split large services into smaller, focused ones.
+  </Accordion>
+</AccordionGroup>
+
+## Debugging
+
+### VS Code debugging
+
+Create `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug NestJS",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:debug"],
+      "console": "integratedTerminal",
+      "restart": true,
+      "protocol": "inspector"
+    }
+  ]
+}
+```
+
+Then press F5 to start debugging.
+
+### Logging requests
+
+Enable request logging in `main.ts`:
+
+```typescript
+app.use(morgan('combined'));
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Frontend development" icon="browser" href="/guides/frontend">
+    Learn about the Next.js frontend.
+  </Card>
+
+  <Card title="Background jobs" icon="gears" href="/guides/jobs">
+    Understand job processing with BullMQ.
+  </Card>
+
+  <Card title="Webhooks" icon="webhook" href="/guides/webhooks">
+    Implement webhook handlers.
+  </Card>
+
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy to production.
+  </Card>
+</CardGroup>
