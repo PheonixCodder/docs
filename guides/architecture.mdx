@@ -130,13 +130,46 @@ The backend is built with NestJS and follows a modular architecture pattern.
     **Location:** `backend/src/supabase/`
   </Accordion>
 
-  <Accordion title="TasksModule" icon="clock">
-    Manages scheduled tasks using NestJS Schedule:
-    - **Polling** — Checks active stores and enqueues sync jobs
-    - **Health checks** — Runs every 5 minutes
-    - **Cleanup** — Removes completed jobs older than 7 days (runs daily)
+  <Accordion title="TasksService" icon="clock">
+    Manages scheduled tasks using NestJS `@Interval` decorators:
+
+    **Scheduled tasks:**
+    
+    1. **pollAllActiveStores()** — Main sync orchestrator
+       - Fetches all active stores with credentials
+       - Enqueues products, orders, and returns jobs for each store
+       - Includes 500ms delay between stores to prevent rate limiting
+       - Updates store health status on success/failure
+       - Creates alerts for failures
+    
+    2. **healthCheck()** — System health monitoring
+       - Interval: Every 5 minutes (300,000ms)
+       - Checks active store count
+       - Validates Redis/Supabase connectivity
+       - Creates critical alerts on failure
+    
+    3. **cleanupOldJobs()** — Job queue maintenance
+       - Interval: Daily (86,400,000ms)
+       - Removes completed jobs older than 7 days
+       - Cleans all three queues (products, orders, returns)
+       - Keeps last 1000 jobs per queue
 
     **Location:** `backend/src/tasks/tasks.service.ts`
+
+    **Job creation logic:**
+    ```typescript
+    // Products job
+    jobId: `products-${storeId}-${Date.now()}`
+    attempts: 5
+    backoff: exponential, 5000ms delay
+    
+    // Orders job
+    jobId: `orders-${storeId}-${Date.now()}`
+    
+    // Returns job (selective platforms)
+    platforms: ['amazon', 'walmart', 'shopify', 'target']
+    jobId: `returns-${storeId}-${Date.now()}`
+    ```
   </Accordion>
 </AccordionGroup>
 
