@@ -47,6 +47,23 @@ Create a `backend/.env` file with the following variables:
   **Default:** `6379`
 </ParamField>
 
+### Security variables
+
+<ParamField path="CREDENTIALS_ENCRYPTION_KEY" type="string" required>
+  A 64-character hex string (32 bytes) used to encrypt/decrypt platform credentials.
+  
+  **Generate a key:**
+  ```bash
+  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  ```
+  
+  **Example:** `a1b2c3d4e5f6...` (64 characters)
+  
+  <Warning>
+    This key is critical for security. If lost, all stored credentials become unrecoverable. Back up this key securely.
+  </Warning>
+</ParamField>
+
 ### Optional variables
 
 <ParamField path="REDIS_PASSWORD" type="string">
