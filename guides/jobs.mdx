@@ -216,25 +216,65 @@ export class ProductsProcessor extends WorkerHost {
 - **Health tracking** — Updates store status on success/failure
 - **Alert creation** — Logs failures to alerts table
 
-### Error handling
+### Error handling (actual implementation)
 
-Handle errors gracefully:
+CrossConnect-Phos implements comprehensive error handling:
 
 ```typescript
-@Process('sync')
-async handleProductSync(job: Job) {
+private async processShopifyProducts(service, store) {
   try {
-    // Process job
-    return { success: true };
-  } catch (error) {
-    // Log error
-    console.error('Job failed:', error);
+    // 1. Fetch products with error boundary
+    const products = await service.fetchProducts();
+    
+    if (!products.length) {
+      this.logger.warn('No products found. Skipping.');
+      return;
+    }
 
-    // Throw to trigger retry
+    // 2. Map and insert products
+    const productRows = products.flatMap(p => 
+      mapShopifyProductToDB(p, store.id)
+    );
+    await this.productsRepo.insertProducts(productRows);
+
+    // 3. Sync inventory with delta detection
+    const inventoryItems = await service.fetchInventory(since);
+    // ... inventory processing
+
+  } catch (error) {
+    this.logger.error(
+      `Shopify products failed for store ${store.id}`,
+      error.stack
+    );
+
+    // Update store health
+    await this.storeRepo.updateStoreHealth(
+      store.id,
+      'unhealthy',
+      `Products sync failed: ${error.message}`
+    );
+
+    // Create alert
+    await this.alertsRepo.createAlert({
+      store_id: store.id,
+      alert_type: 'products_sync_failure',
+      message: `Shopify products sync failed: ${error.message}`,
+      severity: 'high',
+      platform: 'shopify',
+    });
+
+    // Re-throw to trigger BullMQ retry
     throw error;
   }
 }
 ```
+
+**Error handling features:**
+- Detailed error logging with stack traces
+- Store health status updates
+- Alert creation for monitoring
+- Automatic retry via BullMQ
+- Platform-specific error messages
 
 ### Job events
 
