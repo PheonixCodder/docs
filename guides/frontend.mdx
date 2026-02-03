@@ -150,21 +150,45 @@ CrossConnect-Phos uses Next.js App Router with route groups for organization.
 
 Route groups organize routes without affecting the URL structure:
 
-- **(auth)** — Authentication pages (login, register)
-- **(dashboard)** — Protected dashboard pages
+- **(auth)** — Authentication pages with centered layout
+  - `/signin` — Sign in with email/password
+  - `/signup` — Create new account
+  - `/forgot-password` — Password reset
+  - `/update-password` — Update password after reset
+  - `/onboarding/organization` — Create organization after signup
 
-**Example structure:**
+- **(dashboard)** — Protected dashboard with sidebar navigation
+  - `/` — Main dashboard with metrics and charts
+  - `/integrations` — Store connection management
+  - `/events` — Webhook event logs
+  - `/notifications` — System alerts
+  - `/settings` — User and organization settings
+  - `/team` — Team member management
+
+**Actual structure:**
 
 ```
 app/
 ├── (auth)/
-│   ├── login/
-│   │   └── page.tsx         # /login
-│   └── layout.tsx           # Auth layout
-└── (dashboard)/
-    ├── integrations/
-    │   └── page.tsx         # /integrations
-    └── layout.tsx           # Dashboard layout
+│   ├── signin/page.tsx              # /signin
+│   ├── signup/page.tsx              # /signup
+│   ├── forgot-password/page.tsx     # /forgot-password
+│   ├── update-password/page.tsx     # /update-password
+│   ├── onboarding/
+│   │   └── organization/page.tsx    # /onboarding/organization
+│   └── layout.tsx                   # Centered auth layout
+├── (dashboard)/
+│   ├── page.tsx                     # / (main dashboard)
+│   ├── integrations/page.tsx        # /integrations
+│   ├── events/page.tsx              # /events
+│   ├── notifications/page.tsx       # /notifications
+│   ├── settings/page.tsx            # /settings
+│   ├── team/page.tsx                # /team
+│   └── layout.tsx                   # Dashboard layout with sidebar
+├── api/
+│   └── warehance/route.ts           # API proxy for Warehance
+└── auth/
+    └── callback/route.ts            # OAuth callback handler
 ```
 
 ### Creating a new page
