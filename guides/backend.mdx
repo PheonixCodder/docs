@@ -63,6 +63,55 @@ backend/
 └── package.json
 ```
 
+## Application bootstrap
+
+The `main.ts` file configures the NestJS application:
+
+```typescript
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,      // Required for webhook signature validation
+    bufferLogs: true,   // Buffer logs until logger is ready
+  });
+
+  // Enable CORS for frontend
+  app.enableCors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+  });
+
+  // Global validation pipe
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,              // Auto-transform payloads to DTO types
+      whitelist: true,              // Strip unknown properties
+      forbidNonWhitelisted: true,   // Throw error on unknown properties
+    })
+  );
+
+  // Use structured logging
+  app.useLogger(app.get(Logger));
+
+  // Global prefix for API routes
+  app.setGlobalPrefix('api', {
+    exclude: ['/'],  // Exclude root path
+  });
+
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port);
+
+  const logger = app.get(Logger);
+  logger.log(`Application is running on: http://localhost:${port}`);
+}
+```
+
+**Key configurations:**
+- **Raw body** — Enables webhook signature validation
+- **CORS** — Restricted to `FRONTEND_URL` only
+- **Validation** — Automatic DTO validation and transformation
+- **Global prefix** — All routes prefixed with `/api`
+- **Structured logging** — Uses nestjs-pino for JSON logs
+
 ## Development workflow
 
 ### Running the backend
@@ -74,7 +123,7 @@ cd backend
 npm run start:dev
 ```
 
-The server will start on the port specified in your `.env` file (default: 3001).
+The server will start on the port specified in your `.env` file (default: 3000, recommended: 3001).
 
 ### Available scripts
 
