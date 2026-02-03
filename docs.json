@@ -45,9 +45,17 @@
         "tab": "Connectors",
         "groups": [
           {
-            "group": "Platform integrations",
+            "group": "Overview",
             "pages": [
               "connectors/overview"
+            ]
+          },
+          {
+            "group": "Marketplaces",
+            "pages": [
+              "connectors/shopify",
+              "connectors/tiktok",
+              "connectors/faire"
             ]
           }
         ]
