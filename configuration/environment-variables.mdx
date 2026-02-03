@@ -246,16 +246,44 @@ SUPABASE_SERVICE_KEY=your-service-key
 
 ## Validation
 
-The backend uses NestJS ConfigModule with validation. If required environment variables are missing, the application will fail to start with a clear error message.
+The backend uses Joi schema validation in `config/env.validation.ts`:
 
-To test your configuration:
+```typescript
+import * as Joi from 'joi';
+
+export const envValidationSchema = Joi.object({
+  SUPABASE_URL: Joi.string().uri().required(),
+  SUPABASE_SERVICE_KEY: Joi.string().required(),
+});
+```
+
+**Validation rules:**
+- `SUPABASE_URL` — Must be a valid URI
+- `SUPABASE_SERVICE_KEY` — Required string
+
+If required environment variables are missing or invalid, the application will fail to start with a clear error message:
 
 ```bash
 cd backend
 npm run start:dev
+
+# Error example:
+# Error: Config validation error: "SUPABASE_URL" is required
 ```
 
-Look for validation errors in the console output.
+**Adding validation for new variables:**
+
+```typescript
+export const envValidationSchema = Joi.object({
+  SUPABASE_URL: Joi.string().uri().required(),
+  SUPABASE_SERVICE_KEY: Joi.string().required(),
+  
+  // Add new variables
+  REDIS_HOST: Joi.string().default('localhost'),
+  REDIS_PORT: Joi.number().default(6379),
+  NEW_API_KEY: Joi.string().required(),
+});
+```
 
 ## Security best practices
 
