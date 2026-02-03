@@ -13,15 +13,39 @@ Three main queues process different types of data:
 
 <CardGroup cols={3}>
   <Card title="Products queue" icon="box">
-    Synchronizes product data from marketplaces
+    Synchronizes product and inventory data (concurrency: 5)
   </Card>
   <Card title="Orders queue" icon="receipt">
-    Synchronizes order data from marketplaces
+    Synchronizes order and order items data
   </Card>
   <Card title="Returns queue" icon="rotate-left">
-    Synchronizes return data from marketplaces
+    Synchronizes returns (Amazon, Walmart, Shopify, Target only)
   </Card>
 </CardGroup>
+
+### Queue configuration
+
+Each queue is configured in `JobsModule` with:
+
+```typescript
+BullModule.registerQueue({
+  name: 'products',
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,  // 2 seconds base delay
+    },
+    removeOnComplete: true,
+    removeOnFail: false,
+  },
+})
+```
+
+**Job naming convention:**
+- Products: `products-{storeId}-{timestamp}`
+- Orders: `orders-{storeId}-{timestamp}`
+- Returns: `returns-{storeId}-{timestamp}`
 
 ## How jobs work
 
