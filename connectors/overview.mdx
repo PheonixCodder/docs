@@ -119,22 +119,44 @@ export class ShopifyService {
 
 ### Mapper
 
-Transforms platform data to internal format:
+Transforms platform data to internal Supabase schema:
 
 ```typescript
-@Injectable()
-export class ShopifyMapper {
-  toProduct(shopifyProduct: any): Product {
+// Actual Shopify mapper
+export function mapShopifyProductToDB(
+  product: ShopifyProductNode,
+  storeId: string,
+): Database['public']['Tables']['products']['Insert'][] {
+  return product.variants.nodes.map((variant) => {
+    const productId = product.id.split('/').pop();
+    const variantId = variant.id.split('/').pop();
+
+    // Namespace SKU to avoid conflicts
+    const sku = variant.sku
+      ? `shopify-${productId}-${variant.sku}`
+      : `shopify-${productId}-variant-${variantId}`;
+
     return {
-      id: shopifyProduct.id.toString(),
-      name: shopifyProduct.title,
-      price: parseFloat(shopifyProduct.variants[0].price),
-      sku: shopifyProduct.variants[0].sku,
-      // ... more mappings
+      external_product_id: product.id,
+      platform: 'shopify',
+      store_id: storeId,
+      sku,
+      title: product.title,
+      description: product.descriptionPlainSummary || null,
+      price: variant.price ? Number(variant.price) : 0,
+      currency: 'USD',
+      status: product.status?.toLowerCase() ?? 'draft',
     };
-  }
+  });
 }
 ```
+
+**Mapper responsibilities:**
+- Transform platform-specific data to Supabase schema
+- Handle missing/null values
+- Namespace SKUs to prevent conflicts
+- Extract nested data structures
+- Type-safe transformations using generated types
 
 ## Common features
 
