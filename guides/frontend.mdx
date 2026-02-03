@@ -376,49 +376,83 @@ async function handleSubmit() {
 
 ## State management
 
-### Client-side state
+### Global state with Zustand
 
-Use React hooks for component state:
+CrossConnect-Phos uses Zustand for global state management:
+
+```typescript store/useStore.ts
+import { create } from 'zustand';
+import { Database } from '@/types/supabase.types';
+
+interface DashboardStore {
+  activeStore: Database['public']['Tables']['stores']['Row'] | null;
+  setActiveStore: (store: Database['public']['Tables']['stores']['Row'] | null) => void;
+}
+
+export const useDashboardStore = create<DashboardStore>((set) => ({
+  activeStore: null,
+  setActiveStore: (store) => set({ activeStore: store }),
+}));
+```
+
+**Usage in components:**
 
 ```tsx
-'use client';
+import { useDashboardStore } from '@/store/useStore';
 
-import { useState } from 'react';
-
-export default function Counter() {
-  const [count, setCount] = useState(0);
+export function MyComponent() {
+  const activeStore = useDashboardStore((state) => state.activeStore);
+  const setActiveStore = useDashboardStore((state) => state.setActiveStore);
 
   return (
     <div>
-      <p>Count: {count}</p>
-      <button onClick={() => setCount(count + 1)}>
-        Increment
-      </button>
+      {activeStore ? activeStore.name : 'No store selected'}
     </div>
   );
 }
 ```
 
-### Server components
+### URL state with nuqs
 
-Leverage Server Components for data fetching:
+Query parameters managed with `nuqs`:
 
 ```tsx
-async function getProducts() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/products`);
-  return res.json();
-}
+import { useQueryState, parseAsStringLiteral } from 'nuqs';
 
-export default async function ProductsPage() {
-  const products = await getProducts();
+const timeRangeValues = ['7d', '30d', '90d', '1y'] as const;
 
-  return (
-    <div>
-      {products.map(product => (
-        <div key={product.id}>{product.name}</div>
-      ))}
-    </div>
-  );
+const [timeRange, setTimeRange] = useQueryState<TimeRange>(
+  'range',
+  parseAsStringLiteral(timeRangeValues).withDefault('7d')
+);
+
+// URL: /?range=30d
+```
+
+### Server components with Supabase
+
+Fetch data server-side with Supabase:
+
+```tsx
+import { createClient } from '@/lib/supabase/server';
+import { redirect } from 'next/navigation';
+
+export default async function DashboardPage() {
+  const supabase = await createClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect('/signin');
+  }
+
+  // Fetch data server-side
+  const { data: stores } = await supabase
+    .from('stores')
+    .select('*')
+    .eq('org_id', user.org_id);
+
+  return <DashboardView stores={stores} />;
 }
 ```
 
