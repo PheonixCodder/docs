@@ -1,0 +1,360 @@
+---
+title: "Connectors overview"
+description: "Learn about marketplace and warehouse integrations in CrossConnect-Phos"
+---
+
+## Overview
+
+CrossConnect-Phos provides pre-built connectors for major e-commerce marketplaces and warehouse management systems. Each connector handles authentication, data synchronization, and platform-specific logic.
+
+## Supported platforms
+
+<CardGroup cols={2}>
+  <Card title="Amazon" icon="amazon" iconType="brands" href="/connectors/amazon">
+    Amazon Seller Central and MWS API integration
+  </Card>
+  <Card title="Walmart" icon="store" href="/connectors/walmart">
+    Walmart Marketplace API integration
+  </Card>
+  <Card title="Shopify" icon="shopify" iconType="brands" href="/connectors/shopify">
+    Shopify Admin API and webhooks
+  </Card>
+  <Card title="TikTok Shop" icon="tiktok" iconType="brands" href="/connectors/tiktok">
+    TikTok Shop API integration
+  </Card>
+  <Card title="Faire" icon="handshake" href="/connectors/faire">
+    Faire wholesale marketplace
+  </Card>
+  <Card title="Target" icon="bullseye" href="/connectors/target">
+    Target Plus marketplace
+  </Card>
+  <Card title="Warehance" icon="warehouse" href="/connectors/warehance">
+    Warehance WMS integration
+  </Card>
+</CardGroup>
+
+## Connector architecture
+
+Each connector follows a consistent structure:
+
+```
+connectors/[platform]/
+├── [platform].module.ts      # Module definition
+├── [platform].controller.ts  # API endpoints
+├── [platform].service.ts     # Business logic
+├── [platform].mapper.ts      # Data transformation
+└── [platform].types.ts       # TypeScript types
+```
+
+### Module
+
+Defines the connector module and its dependencies:
+
+```typescript
+@Module({
+  imports: [HttpModule, BullModule.registerQueue({ name: 'products' })],
+  controllers: [ShopifyController],
+  providers: [ShopifyService, ShopifyMapper],
+  exports: [ShopifyService],
+})
+export class ShopifyModule {}
+```
+
+### Controller
+
+Exposes API endpoints for the connector:
+
+```typescript
+@Controller('shopify')
+export class ShopifyController {
+  @Get('products')
+  async getProducts(@Query('storeId') storeId: string) {
+    return this.shopifyService.fetchProducts(storeId);
+  }
+
+  @Post('sync')
+  async syncStore(@Body() dto: SyncStoreDto) {
+    return this.shopifyService.syncStore(dto.storeId);
+  }
+}
+```
+
+### Service
+
+Contains business logic and API client:
+
+```typescript
+@Injectable()
+export class ShopifyService {
+  async fetchProducts(storeId: string) {
+    const credentials = await this.getCredentials(storeId);
+    const response = await this.httpService.get(
+      `https://${credentials.shop}.myshopify.com/admin/api/2024-01/products.json`,
+      { headers: { 'X-Shopify-Access-Token': credentials.accessToken } }
+    );
+    return response.data.products;
+  }
+}
+```
+
+### Mapper
+
+Transforms platform data to internal format:
+
+```typescript
+@Injectable()
+export class ShopifyMapper {
+  toProduct(shopifyProduct: any): Product {
+    return {
+      id: shopifyProduct.id.toString(),
+      name: shopifyProduct.title,
+      price: parseFloat(shopifyProduct.variants[0].price),
+      sku: shopifyProduct.variants[0].sku,
+      // ... more mappings
+    };
+  }
+}
+```
+
+## Common features
+
+All connectors support:
+
+<AccordionGroup>
+  <Accordion title="Authentication">
+    Each connector handles platform-specific authentication:
+    - OAuth 2.0 (Shopify, Amazon)
+    - API keys (Walmart, TikTok)
+    - Token-based auth (Faire, Target)
+
+    Credentials are stored securely in the `store_credentials` table.
+  </Accordion>
+
+  <Accordion title="Data synchronization">
+    Connectors sync three main data types:
+    - **Products** — SKUs, prices, inventory, descriptions
+    - **Orders** — Order details, customer info, fulfillment status
+    - **Returns** — Return requests, reasons, refund status
+
+    Sync can be triggered manually or scheduled automatically.
+  </Accordion>
+
+  <Accordion title="Webhooks (where supported)">
+    Real-time event processing for:
+    - Shopify
+    - TikTok
+    - Walmart
+
+    Other platforms use polling-based sync.
+  </Accordion>
+
+  <Accordion title="Error handling">
+    Robust error handling with:
+    - Automatic retries with exponential backoff
+    - Rate limit detection and throttling
+    - Detailed error logging
+    - Alert generation for critical failures
+  </Accordion>
+
+  <Accordion title="Rate limiting">
+    Respects platform rate limits:
+    - Shopify: 2 requests/second
+    - Amazon: Varies by endpoint
+    - Walmart: 5000 requests/day
+
+    Implements request throttling and queuing.
+  </Accordion>
+</AccordionGroup>
+
+## Adding a store
+
+To connect a new store to a platform:
+
+<Steps>
+  <Step title="Create store record">
+    ```typescript
+    const store = await storesRepository.create({
+      name: 'My Shopify Store',
+      platform: 'shopify',
+      status: 'active',
+    });
+    ```
+  </Step>
+
+  <Step title="Add credentials">
+    ```typescript
+    await storeCredentialsRepository.create({
+      store_id: store.id,
+      platform: 'shopify',
+      credentials: {
+        shop: 'mystore.myshopify.com',
+        accessToken: 'shpat_xxxxx',
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Trigger initial sync">
+    ```typescript
+    await shopifyService.syncStore(store.id);
+    ```
+  </Step>
+</Steps>
+
+## Connector status
+
+Monitor connector health in the dashboard:
+
+- **Active** — Connector is syncing successfully
+- **Error** — Recent sync failures detected
+- **Paused** — Sync temporarily disabled
+- **Disconnected** — Credentials invalid or expired
+
+## Data flow
+
+```mermaid
+graph TD
+    A[Platform API] -->|Fetch Data| B[Connector Service]
+    B -->|Transform| C[Mapper]
+    C -->|Validate| D[Repository]
+    D -->|Save| E[Supabase]
+    B -->|Enqueue| F[Job Queue]
+    F -->|Process| B
+```
+
+1. Connector service fetches data from platform API
+2. Mapper transforms data to internal format
+3. Repository validates and saves to database
+4. Background jobs handle async processing
+
+## Configuration
+
+### Per-store settings
+
+Each store can have custom sync settings:
+
+```typescript
+{
+  syncInterval: 15,           // Minutes between syncs
+  syncProducts: true,         // Enable product sync
+  syncOrders: true,           // Enable order sync
+  syncReturns: false,         // Disable return sync
+  webhooksEnabled: true,      // Use webhooks if available
+}
+```
+
+### Global settings
+
+Platform-wide settings in environment variables:
+
+```bash
+# Rate limiting
+SHOPIFY_MAX_REQUESTS_PER_SECOND=2
+AMAZON_MAX_REQUESTS_PER_MINUTE=60
+
+# Retry configuration
+MAX_RETRY_ATTEMPTS=3
+RETRY_BACKOFF_MS=5000
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Use webhooks when available">
+    Webhooks provide real-time updates and reduce API calls. Enable webhooks for Shopify, TikTok, and Walmart.
+  </Accordion>
+
+  <Accordion title="Respect rate limits">
+    Always implement rate limiting to avoid API bans. Use exponential backoff for retries.
+  </Accordion>
+
+  <Accordion title="Handle partial failures">
+    If syncing 1000 products and one fails, continue with the rest. Log failures for review.
+  </Accordion>
+
+  <Accordion title="Validate credentials regularly">
+    Periodically test credentials to detect expired tokens before sync failures occur.
+  </Accordion>
+
+  <Accordion title="Monitor sync health">
+    Track sync success rates and alert on anomalies. Set up dashboards for visibility.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Authentication failures">
+    **Symptoms:** 401 Unauthorized errors
+
+    **Solutions:**
+    - Verify credentials in `store_credentials` table
+    - Check if access token has expired
+    - Ensure API permissions are correctly configured
+    - Re-authenticate the store if needed
+  </Accordion>
+
+  <Accordion title="Rate limit errors">
+    **Symptoms:** 429 Too Many Requests errors
+
+    **Solutions:**
+    - Reduce sync frequency
+    - Implement request throttling
+    - Use webhooks instead of polling
+    - Spread syncs across multiple time windows
+  </Accordion>
+
+  <Accordion title="Data sync failures">
+    **Symptoms:** Missing or outdated data
+
+    **Solutions:**
+    - Check job queue for failed jobs
+    - Review error logs for specific failures
+    - Verify data mapping logic
+    - Manually trigger re-sync
+  </Accordion>
+
+  <Accordion title="Webhook not receiving events">
+    **Symptoms:** No webhook events received
+
+    **Solutions:**
+    - Verify webhook URL is publicly accessible
+    - Check webhook configuration in platform
+    - Ensure HTTPS is enabled
+    - Test with platform's webhook testing tool
+  </Accordion>
+</AccordionGroup>
+
+## Platform-specific guides
+
+<CardGroup cols={2}>
+  <Card title="Amazon" icon="amazon" iconType="brands" href="/connectors/amazon">
+    MWS and SP-API integration
+  </Card>
+  <Card title="Walmart" icon="store" href="/connectors/walmart">
+    Marketplace API setup
+  </Card>
+  <Card title="Shopify" icon="shopify" iconType="brands" href="/connectors/shopify">
+    Admin API and webhooks
+  </Card>
+  <Card title="TikTok Shop" icon="tiktok" iconType="brands" href="/connectors/tiktok">
+    Shop API integration
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Background jobs" icon="gears" href="/guides/jobs">
+    Learn how connectors use job queues
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="/guides/webhooks">
+    Set up real-time event processing
+  </Card>
+  <Card title="Backend development" icon="server" href="/guides/backend">
+    Build custom connectors
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Solve common connector issues
+  </Card>
+</CardGroup>
