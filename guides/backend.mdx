@@ -243,36 +243,98 @@ export class ShopifyService {
 
 ### Repositories
 
-Repositories handle database operations with Supabase.
+Repositories handle database operations with Supabase using `nestjs-supabase-js`.
 
 **Location:** `backend/src/supabase/repositories/`
 
-**Example:**
+**Actual StoresRepository example:**
 
 ```typescript
 @Injectable()
-export class ProductsRepository {
-  constructor(private readonly supabase: SupabaseClient) {}
+export class StoresRepository {
+  private logger = new Logger(StoresRepository.name);
 
-  async findByStoreId(storeId: string) {
-    const { data, error } = await this.supabase
-      .from('products')
+  constructor(
+    @InjectSupabaseClient()
+    private readonly supabaseClient: SupabaseClient<Database>,
+  ) {}
+
+  async getAllActiveStores(): Promise<Database['public']['Tables']['stores']['Row'][]> {
+    const { data, error } = await this.supabaseClient
+      .from('stores')
       .select('*')
-      .eq('store_id', storeId);
+      .eq('auth_status', 'active');
 
-    if (error) throw error;
-    return data;
+    if (error) {
+      this.logger.error('Failed to fetch active stores', error);
+      throw error;
+    }
+
+    return data || [];
   }
 
-  async bulkUpsert(products: Product[]) {
-    const { error } = await this.supabase
-      .from('products')
-      .upsert(products);
+  async updateStoreHealth(
+    storeId: string,
+    status: 'healthy' | 'unhealthy',
+    message?: string,
+  ): Promise<void> {
+    const { error } = await this.supabaseClient
+      .from('stores')
+      .update({
+        last_health_check: new Date().toISOString(),
+        auth_status: status === 'healthy' ? 'active' : 'inactive',
+      })
+      .eq('id', storeId);
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`Failed to update store health`, error);
+    }
+
+    // Create alert if unhealthy
+    if (status === 'unhealthy') {
+      await this.createAlert(
+        storeId,
+        'store_health_check',
+        message || 'Store connection failed',
+        'high',
+      );
+    }
+  }
+
+  async updateWebhookStatus(storeId: string, status: boolean): Promise<void> {
+    const { error } = await this.supabaseClient
+      .from('stores')
+      .update({
+        webhook_status: status,
+        auth_status: status ? 'active' : 'inactive',
+      })
+      .eq('id', storeId);
+
+    if (error) {
+      this.logger.error(`Failed to update webhook status`, error);
+    }
+  }
+
+  async storesAsQueued(storeIds: string[]) {
+    const now = new Date().toISOString();
+
+    return await this.supabaseClient
+      .from('stores')
+      .update({
+        last_health_check: now,
+        auth_status: 'active',
+      })
+      .in('id', storeIds);
   }
 }
 ```
+
+**Key patterns:**
+- **Type safety** — Uses generated Supabase types
+- **Error logging** — Logs all database errors
+- **Bulk operations** — Uses `.in()` for batch updates
+- **Alert integration** — Creates alerts on failures
+- **Health tracking** — Updates timestamps and status
 
 ## Adding a new connector
 
