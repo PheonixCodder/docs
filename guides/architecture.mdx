@@ -120,14 +120,43 @@ The backend is built with NestJS and follows a modular architecture pattern.
   </Accordion>
 
   <Accordion title="SupabaseModule" icon="database">
-    Provides repositories for database access:
-    - StoresRepository — Store configuration and status
-    - StoreCredentialsRepository — Platform credentials (encrypted)
-    - OrdersRepository — Order data
-    - ProductsRepository — Product data
-    - AlertsRepository — System alerts and notifications
+    Provides repositories for database access using `nestjs-supabase-js`:
 
-    **Location:** `backend/src/supabase/`
+    **Repositories:**
+    - **StoresRepository** — Store configuration, health status, sync timestamps
+      - `getAllActiveStores()` — Fetch stores with `auth_status = 'active'`
+      - `updateStoreHealth()` — Update health status and create alerts
+      - `updateWebhookStatus()` — Manage webhook connection status
+      - `storesAsQueued()` — Bulk update last_health_check
+    
+    - **StoreCredentialsService** — Encrypted platform credentials
+      - `getActiveStoresWithCredentials()` — Join stores + credentials
+      - `getCredentialsByStoreId()` — Fetch and decrypt credentials
+    
+    - **ProductsRepository** — Product data with batch operations
+      - `insertProducts()` — Upsert products by SKU
+      - `getProductIdsBySkusInBatches()` — Resolve internal IDs
+      - `syncProductsAndInventory()` — Atomic transaction
+    
+    - **OrdersRepository** — Order data
+    - **OrderItemsRepository** — Line items for orders
+    - **InventoryRepository** — Stock levels and warehouse data
+      - `getBySkus()` — Fetch existing inventory for delta comparison
+      - `updateInventoryBatch()` — Bulk upsert inventory
+    
+    - **FulfillmentsRepository** — Shipping and tracking data
+    - **ReturnsRepository** — Return/refund data
+    - **AlertsRepository** — System alerts and notifications
+      - `createAlert()` — Log sync failures, health issues
+    - **MetricsRepository** — Performance metrics
+    - **RawEventsRepository** — Webhook event logs
+
+    **Location:** `backend/src/supabase/repositories/`
+
+    **Security:**
+    - All credentials encrypted using `CryptoService`
+    - Service role key used for backend operations
+    - Row-level security policies enforced
   </Accordion>
 
   <Accordion title="TasksService" icon="clock">
